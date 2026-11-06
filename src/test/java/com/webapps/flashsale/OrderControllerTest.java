@@ -7,6 +7,7 @@ import com.webapps.flashsale.dto.OrderPageResponse;
 import com.webapps.flashsale.security.SecurityConfiguration;
 import com.webapps.flashsale.service.OrderService;
 import java.util.List;
+import java.util.Optional;
 import java.math.BigDecimal;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -55,5 +56,21 @@ class OrderControllerTest {
         mvc.perform(get("/api/v1/orders").param("page", "-1")).andExpect(status().isBadRequest());
         mvc.perform(get("/api/v1/orders").param("size", "101")).andExpect(status().isBadRequest());
         mvc.perform(get("/api/v1/orders").param("size", "0")).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void returnsOrderByIdWithItems() throws Exception {
+        when(orders.getOrder(1L)).thenReturn(Optional.of(new OrderResponse(1L, 2L, null, null,
+                "PENDING", null, null, null, List.of(new OrderItemResponse(5L, 6L, null, 2, new BigDecimal("19.99"))))));
+        mvc.perform(get("/api/v1/orders/1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.orderId").value(1))
+                .andExpect(jsonPath("$.items[0].orderItemId").value(5));
+    }
+
+    @Test
+    void returnsNotFoundForMissingOrder() throws Exception {
+        when(orders.getOrder(99L)).thenReturn(Optional.empty());
+        mvc.perform(get("/api/v1/orders/99")).andExpect(status().isNotFound());
     }
 }

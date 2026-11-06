@@ -4,10 +4,12 @@ import com.webapps.flashsale.dto.OrderResponse;
 import com.webapps.flashsale.dto.OrderItemResponse;
 import com.webapps.flashsale.dto.OrderPageResponse;
 import com.webapps.flashsale.entity.OrderItemEntity;
+import com.webapps.flashsale.entity.OrderEntity;
 import com.webapps.flashsale.repository.OrderItemRepository;
 import com.webapps.flashsale.repository.OrderRepository;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -32,13 +34,21 @@ public class OrderService {
                 : items.findByOrderIdInOrderByOrderItemIdAsc(ids).stream()
                         .collect(Collectors.groupingBy(item -> item.orderId));
         var result = slice.getContent().stream()
-                .map(order -> new OrderResponse(order.orderId, order.userId, order.eventId,
-                        order.eventProductId, order.status, order.expiresAt, order.createdAt, order.updatedAt,
-                        itemsByOrder.getOrDefault(order.orderId, List.of()).stream()
-                                .map(item -> new OrderItemResponse(item.orderItemId, item.productId,
-                                        item.eventProductId, item.quantity, item.unitPriceSnapshot))
-                                .toList()))
+                .map(order -> toResponse(order, itemsByOrder.getOrDefault(order.orderId, List.of())))
                 .toList();
         return new OrderPageResponse(result, page, size, slice.hasNext());
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<OrderResponse> getOrder(long id) {
+        return orders.findById(id).map(order -> toResponse(order,
+                items.findByOrderIdInOrderByOrderItemIdAsc(List.of(id))));
+    }
+
+    private OrderResponse toResponse(OrderEntity order, List<OrderItemEntity> orderItems) {
+        return new OrderResponse(order.orderId, order.userId, order.eventId,
+                order.eventProductId, order.status, order.expiresAt, order.createdAt, order.updatedAt,
+                orderItems.stream().map(item -> new OrderItemResponse(item.orderItemId, item.productId,
+                        item.eventProductId, item.quantity, item.unitPriceSnapshot)).toList());
     }
 }

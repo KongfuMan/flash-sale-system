@@ -117,12 +117,14 @@ curl http://localhost:8081/actuator/health
 
 ```bash
 curl 'http://localhost:8081/api/v1/orders?page=0&size=20'
+curl http://localhost:8081/api/v1/orders/1
 ```
 
 默认 H2 数据库没有业务表，因此订单接口需要连接已初始化业务表的数据库。
 订单按 ID 升序分页，`page` 从 0 开始，`size` 默认 20、最大 100。响应包含 `orders`、
 `page`、`size`、`hasNext`，每个订单的 `items` 包含对应订单项。接口先查询订单页，
 再批量查询订单项；建议为 `order_items.order_id` 添加索引。已有数据库未自动修改。
+按 ID 查询不存在的订单时返回 HTTP 404。
 
 响应示例：
 

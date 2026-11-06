@@ -7,6 +7,7 @@ import com.webapps.flashsale.repository.OrderRepository;
 import com.webapps.flashsale.service.OrderService;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.SliceImpl;
@@ -55,6 +56,24 @@ class OrderServiceTest {
         var page = PageRequest.of(0, 20, Sort.by("orderId"));
         when(orders.findAllBy(page)).thenReturn(new SliceImpl<>(List.of(), page, false));
         assertThat(service.getOrders(0, 20).orders()).isEmpty();
+        verifyNoInteractions(items);
+    }
+
+    @Test
+    void retrievesOrderAndItsItems() {
+        OrderEntity order = new OrderEntity();
+        order.orderId = 1L;
+        OrderItemEntity item = new OrderItemEntity();
+        item.orderItemId = 10L;
+        when(orders.findById(1L)).thenReturn(Optional.of(order));
+        when(items.findByOrderIdInOrderByOrderItemIdAsc(List.of(1L))).thenReturn(List.of(item));
+        assertThat(service.getOrder(1L).orElseThrow().items()).extracting("orderItemId").containsExactly(10L);
+    }
+
+    @Test
+    void missingOrderDoesNotQueryItems() {
+        when(orders.findById(99L)).thenReturn(Optional.empty());
+        assertThat(service.getOrder(99L)).isEmpty();
         verifyNoInteractions(items);
     }
 }
