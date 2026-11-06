@@ -1,6 +1,8 @@
-# Spring Boot Web Demo
+# FlashSale
 
 一个 Spring Boot REST API 示例，使用内存数据库，无需外部数据库或 Docker。
+项目已更名为 FlashSale，但当前业务仍是生成问候语，并未实现秒杀功能。
+为兼容现有客户端和数据库，保留 `/api/v1/greeting` 路由、`greeting_template` 表和现有 Flyway 迁移。
 
 ## 环境
 
@@ -23,29 +25,35 @@ mvn spring-boot:run
 
 ```bash
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
-SPRING_PROFILES_ACTIVE=prod java -jar target/spring-boot-web-demo-0.0.1-SNAPSHOT.jar
+SPRING_PROFILES_ACTIVE=prod java -jar target/flashsale-0.0.1-SNAPSHOT.jar
 ```
 
 未指定 profile 时只使用共享配置。在 IntelliJ 的运行配置中可通过环境变量
 `SPRING_PROFILES_ACTIVE=dev` 选择开发环境。不要将密码或其他密钥提交到配置文件；
 应通过环境变量或外部密钥管理系统提供。
 
+开发环境默认连接本机 Docker Citus coordinator：`localhost:5442/postgres`，用户为
+`postgres`。可通过 `CITUS_JDBC_URL`、`CITUS_USERNAME` 和 `CITUS_PASSWORD` 覆盖。
+`dev` profile 默认禁用 Flyway，避免自动修改现有数据库；需要迁移时，请先确认目标数据库，
+然后显式启用 `spring.flyway.enabled`。问候接口需要迁移创建并初始化的 `greeting_template` 表；
+在现有数据库中启用 Flyway 前，应先检查已有 schema 和 Flyway 历史记录。建议使用独立的开发数据库。
+
 ## 生产组件示例
 
-- `dto`、`domain`、`entity` 和 `mapper` 演示 API、领域模型和数据模型之间的分离；示例 entity 是普通 Java record，不是 JPA 实体。
+- `dto`、`domain`、`entity` 和 `mapper` 演示 API、领域模型和数据模型之间的分离；entity 使用 JPA 注解，由 Hibernate 映射。
 - `@Valid` 和 Bean Validation 验证请求；`@RestControllerAdvice` 返回统一的错误响应。
 - Spring Security 仅允许 GET/HEAD 访问问候接口和 `/actuator/health`，其他请求被拒绝。此示例没有配置身份认证，不能作为生产安全配置直接使用。
 - Actuator 提供健康检查和 Micrometer 指标。默认只公开健康检查；指标端点没有对外开放，应在配置认证和授权后再公开。
-- Flyway 在启动时对临时 H2 内存数据库执行 `db/migration` 中的迁移。数据重启后丢失；问候 DAO 仍使用固定值，不读取该表。真实部署需要配置持久数据库并验证对应数据库的迁移。
-- `GreetingService` 使用 SLF4J 记录不含请求数据的调试日志。
+- 默认环境中 Flyway 对临时 H2 内存数据库执行 `db/migration` 中的迁移。数据重启后丢失；问候 DAO 通过 Spring Data JPA 和 Hibernate 读取模板。真实部署需要配置持久数据库并验证对应数据库的迁移。
+- `FlashSaleService` 使用 SLF4J 记录不含请求数据的调试日志。
 - `ExternalIntegrationClient` 演示外部 HTTPS 请求、超时和可选的进程内 TTL 缓存；默认禁用且不会在启动时发出请求。通过 `demo.integration.enabled`、`demo.integration.url`、`demo.integration.connect-timeout`、`demo.integration.request-timeout` 和 `demo.integration.cache-ttl` 配置。缓存不是分布式缓存。
 
 ## Bean Discovery vs Bean Definition
 
 **Bean Discovery**指 Spring 找到需要注册的组件的一种方式。例如，
 组件扫描会查找扫描范围内带有 `@Component` 及其派生注解的类。
-本项目的 `@SpringBootApplication` 默认从 `com.example.demo` 包开始扫描，
-因此可以发现带有 `@RestController` 的 `GreetingController`。
+本项目的 `@SpringBootApplication` 默认从 `com.webapps.flashsale` 包开始扫描，
+因此可以发现带有 `@RestController` 的 `FlashSaleController`。
 
 **Bean Definition（定义）**是 Spring 容器中描述如何创建和管理一个 Bean 的配置，
 例如 Bean 的类型、名称、作用域，以及创建方式。组件扫描发现一个类后，Spring
@@ -75,7 +83,7 @@ Spring 随后根据这些定义创建实例并注入依赖。
 
 ```java
 @RestController
-public class GreetingController {
+public class FlashSaleController {
     // ...
 }
 ```
@@ -129,13 +137,13 @@ mvn test
 
 1. `pom.xml`：Spring Boot Web 和测试依赖。
 2. `MainApplication.java`：`@SpringBootApplication` 和应用入口。
-3. `controller/GreetingController.java`：处理 GET 请求和 JSON 响应。
-4. `service/GreetingService.java`：生成问候语的业务逻辑。
-5. `repository/GreetingRepository.java`：向业务层提供问候语模板。
-6. `dao/GreetingDao.java`：提供模板数据，目前使用内存中的固定值。
-7. `GreetingControllerTest.java`：使用 `MockMvc` 验证 HTTP 路由和响应。
+3. `controller/FlashSaleController.java`：处理 GET 请求和 JSON 响应。
+4. `service/FlashSaleService.java`：生成问候语的业务逻辑。
+5. `repository/FlashSaleRepository.java`：向业务层提供问候语模板。
+6. `dao/FlashSaleDao.java`：Spring Data JPA 数据访问接口。
+7. `FlashSaleControllerTest.java`：使用 `MockMvc` 验证 HTTP 路由和响应。
 
-调用链为 Controller → Service → Repository → DAO。当前 DAO 使用固定值，未连接数据库；
+调用链为 Controller → Service → Repository → DAO → Hibernate → 数据库。
 Repository 和 DAO 在实际项目中通常可以合并，此处保留两层用于演示。
 
 `@RestController` 的返回值会由 Spring MVC 序列化为 JSON；内嵌的
