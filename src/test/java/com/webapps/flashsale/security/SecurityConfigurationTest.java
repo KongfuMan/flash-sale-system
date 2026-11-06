@@ -23,12 +23,9 @@ class SecurityConfigurationTest {
     ObjectProvider<UserDetailsService> users;
 
     @Test
-    void permitsGreetingAndHealthReads() throws Exception {
-        mvc.perform(get("/api/v1/greeting")).andExpect(status().isOk());
-        mvc.perform(head("/api/v1/greeting")).andExpect(status().isOk());
-        // Actuator is optional; its absence produces 404 rather than 200.
-        assertThat(mvc.perform(get("/actuator/health")).andReturn().getResponse().getStatus()).isIn(200, 404);
-        assertThat(mvc.perform(head("/actuator/health")).andReturn().getResponse().getStatus()).isIn(200, 404);
+    void permitsHealthReads() throws Exception {
+        mvc.perform(get("/actuator/health")).andExpect(status().isOk());
+        mvc.perform(head("/actuator/health")).andExpect(status().isOk());
         assertThat(users.getIfAvailable()).isNull();
     }
 
@@ -37,12 +34,12 @@ class SecurityConfigurationTest {
         mvc.perform(get("/actuator/metrics")).andExpect(status().isForbidden());
         mvc.perform(get("/actuator/health/details")).andExpect(status().isForbidden());
         mvc.perform(get("/other")).andExpect(status().isForbidden());
-        mvc.perform(post("/api/v1/greeting")).andExpect(status().isForbidden());
+        mvc.perform(post("/other")).andExpect(status().isForbidden());
 
-        var result = mvc.perform(get("/api/v1/greeting")).andReturn();
+        var result = mvc.perform(get("/actuator/health")).andReturn();
         var token = (CsrfToken) result.getRequest().getAttribute(CsrfToken.class.getName());
         assertThat(token).isNotNull();
-        mvc.perform(post("/api/v1/greeting")
+        mvc.perform(post("/other")
                 .session((org.springframework.mock.web.MockHttpSession) result.getRequest().getSession())
                 .param(token.getParameterName(), token.getToken()))
                 .andExpect(status().isForbidden());

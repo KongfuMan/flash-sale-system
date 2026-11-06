@@ -1,8 +1,8 @@
 # FlashSale
 
 一个 Spring Boot REST API 示例，使用内存数据库，无需外部数据库或 Docker。
-项目已更名为 FlashSale，但当前业务仍是生成问候语，并未实现秒杀功能。
-为兼容现有客户端和数据库，保留 `/api/v1/greeting` 路由、`greeting_template` 表和现有 Flyway 迁移。
+项目包含秒杀业务表的 JPA 实体和 Repository，以及读取所有订单的示例接口。
+历史 Flyway 迁移仍保留 `greeting_template` 表，以兼容已有迁移记录。
 
 ## 环境
 
@@ -35,17 +35,16 @@ SPRING_PROFILES_ACTIVE=prod java -jar target/flashsale-0.0.1-SNAPSHOT.jar
 开发环境默认连接本机 Docker Citus coordinator：`localhost:5442/postgres`，用户为
 `postgres`。可通过 `CITUS_JDBC_URL`、`CITUS_USERNAME` 和 `CITUS_PASSWORD` 覆盖。
 `dev` profile 默认禁用 Flyway，避免自动修改现有数据库；需要迁移时，请先确认目标数据库，
-然后显式启用 `spring.flyway.enabled`。问候接口需要迁移创建并初始化的 `greeting_template` 表；
+然后显式启用 `spring.flyway.enabled`。
 在现有数据库中启用 Flyway 前，应先检查已有 schema 和 Flyway 历史记录。建议使用独立的开发数据库。
 
 ## 生产组件示例
 
-- `dto`、`domain`、`entity` 和 `mapper` 演示 API、领域模型和数据模型之间的分离；entity 使用 JPA 注解，由 Hibernate 映射。
-- `@Valid` 和 Bean Validation 验证请求；`@RestControllerAdvice` 返回统一的错误响应。
-- Spring Security 仅允许 GET/HEAD 访问问候接口和 `/actuator/health`，其他请求被拒绝。此示例没有配置身份认证，不能作为生产安全配置直接使用。
+- `entity` 和 `repository` 使用 Spring Data JPA 和 Hibernate 映射秒杀业务表。
+- `@RestControllerAdvice` 演示请求验证错误处理。
+- Spring Security 允许匿名 GET/HEAD 访问 `/actuator/health` 和 `/api/v1/orders`，其他请求被拒绝。订单接口返回所有订单，未分页且没有身份认证，仅供演示，不能用于生产数据。
 - Actuator 提供健康检查和 Micrometer 指标。默认只公开健康检查；指标端点没有对外开放，应在配置认证和授权后再公开。
-- 默认环境中 Flyway 对临时 H2 内存数据库执行 `db/migration` 中的迁移。数据重启后丢失；问候 DAO 通过 Spring Data JPA 和 Hibernate 读取模板。真实部署需要配置持久数据库并验证对应数据库的迁移。
-- `FlashSaleService` 使用 SLF4J 记录不含请求数据的调试日志。
+- 默认环境中 Flyway 对临时 H2 内存数据库执行历史迁移；业务表目前只存在于外部数据库。真实部署需要配置持久数据库并验证对应数据库的迁移。
 - `ExternalIntegrationClient` 演示外部 HTTPS 请求、超时和可选的进程内 TTL 缓存；默认禁用且不会在启动时发出请求。通过 `demo.integration.enabled`、`demo.integration.url`、`demo.integration.connect-timeout`、`demo.integration.request-timeout` 和 `demo.integration.cache-ttl` 配置。缓存不是分布式缓存。
 
 ## Bean Discovery vs Bean Definition
@@ -53,7 +52,7 @@ SPRING_PROFILES_ACTIVE=prod java -jar target/flashsale-0.0.1-SNAPSHOT.jar
 **Bean Discovery**指 Spring 找到需要注册的组件的一种方式。例如，
 组件扫描会查找扫描范围内带有 `@Component` 及其派生注解的类。
 本项目的 `@SpringBootApplication` 默认从 `com.webapps.flashsale` 包开始扫描，
-因此可以发现带有 `@RestController` 的 `FlashSaleController`。
+因此可以发现该包及其子包中的 Spring 组件。
 
 **Bean Definition（定义）**是 Spring 容器中描述如何创建和管理一个 Bean 的配置，
 例如 Bean 的类型、名称、作用域，以及创建方式。组件扫描发现一个类后，Spring
@@ -78,12 +77,12 @@ Spring 随后根据这些定义创建实例并注入依赖。
 | 创建方式 | Spring 根据类的定义构造实例 | 方法负责创建并返回实例 |
 | 常见用途 | 自己编写、适合交给 Spring 构造的类 | 第三方类，或需要自定义创建过程的对象 |
 
-例如，本项目中的 `@RestController` 是一种组件注解，因此下面的 Controller
+例如，`@RestController` 是一种组件注解，因此下面的示例 Controller
 可以通过扫描注册：
 
 ```java
 @RestController
-public class FlashSaleController {
+public class ExampleController {
     // ...
 }
 ```
@@ -111,14 +110,21 @@ public class AppConfig {
 另开终端请求接口：
 
 ```bash
-curl http://localhost:8081/api/v1/greeting
-curl 'http://localhost:8081/api/v1/greeting?name=Charles'
+curl http://localhost:8081/actuator/health
 ```
+
+启动 `dev` profile 并连接现有 Citus 数据库后，可以请求订单列表：
+
+```bash
+curl http://localhost:8081/api/v1/orders
+```
+
+默认 H2 数据库没有业务表，因此订单接口需要连接已初始化业务表的数据库。
 
 响应示例：
 
 ```json
-{"message":"Hello, Charles!"}
+{"status":"UP"}
 ```
 
 如果端口 8081 已被占用，可指定其他端口：
@@ -137,14 +143,9 @@ mvn test
 
 1. `pom.xml`：Spring Boot Web 和测试依赖。
 2. `MainApplication.java`：`@SpringBootApplication` 和应用入口。
-3. `controller/FlashSaleController.java`：处理 GET 请求和 JSON 响应。
-4. `service/FlashSaleService.java`：生成问候语的业务逻辑。
-5. `repository/FlashSaleRepository.java`：向业务层提供问候语模板。
-6. `dao/FlashSaleDao.java`：Spring Data JPA 数据访问接口。
-7. `FlashSaleControllerTest.java`：使用 `MockMvc` 验证 HTTP 路由和响应。
-
-调用链为 Controller → Service → Repository → DAO → Hibernate → 数据库。
-Repository 和 DAO 在实际项目中通常可以合并，此处保留两层用于演示。
+3. `entity/`：Hibernate 映射的业务表实体。
+4. `repository/`：Spring Data JPA 数据访问接口。
+5. `BusinessEntityMappingTest.java`：验证实体映射。
 
 `@RestController` 的返回值会由 Spring MVC 序列化为 JSON；内嵌的
 Tomcat 负责接收 HTTP 请求。服务默认监听 8081 端口。

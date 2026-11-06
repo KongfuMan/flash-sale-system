@@ -13,8 +13,8 @@ public class SecurityConfiguration {
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         return http.authorizeHttpRequests(authorize -> authorize
-                .requestMatchers(HttpMethod.GET, "/api/v1/greeting", "/actuator/health").permitAll()
-                .requestMatchers(HttpMethod.HEAD, "/api/v1/greeting", "/actuator/health").permitAll()
+                .requestMatchers(HttpMethod.GET, "/actuator/health", "/api/v1/orders").permitAll()
+                .requestMatchers(HttpMethod.HEAD, "/actuator/health", "/api/v1/orders").permitAll()
                 .anyRequest().denyAll())
                 .build();
     }
