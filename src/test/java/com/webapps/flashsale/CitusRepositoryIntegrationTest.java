@@ -35,8 +35,10 @@ class CitusRepositoryIntegrationTest {
         products.findAll(page);
         events.findAll(page);
         eventProducts.findAll(page);
-        orders.findAll(page);
+        var orderPage = orders.findAllBy(page);
         orderItems.findAll(page);
+        var orderIds = orderPage.getContent().stream().map(order -> order.orderId).toList();
+        orderItems.findByOrderIdInOrderByOrderItemIdAsc(orderIds.isEmpty() ? java.util.List.of(-1L) : orderIds);
         payments.findAll(page);
     }
 }

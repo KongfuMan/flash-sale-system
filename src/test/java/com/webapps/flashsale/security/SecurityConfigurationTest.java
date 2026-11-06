@@ -5,7 +5,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -30,18 +29,8 @@ class SecurityConfigurationTest {
     }
 
     @Test
-    void deniesOtherRoutesAndMethodsEvenWithCsrfToken() throws Exception {
-        mvc.perform(get("/actuator/metrics")).andExpect(status().isForbidden());
-        mvc.perform(get("/actuator/health/details")).andExpect(status().isForbidden());
-        mvc.perform(get("/other")).andExpect(status().isForbidden());
-        mvc.perform(post("/other")).andExpect(status().isForbidden());
-
-        var result = mvc.perform(get("/actuator/health")).andReturn();
-        var token = (CsrfToken) result.getRequest().getAttribute(CsrfToken.class.getName());
-        assertThat(token).isNotNull();
-        mvc.perform(post("/other")
-                .session((org.springframework.mock.web.MockHttpSession) result.getRequest().getSession())
-                .param(token.getParameterName(), token.getToken()))
-                .andExpect(status().isForbidden());
+    void allowsAnonymousRequestsWithoutCsrfToken() throws Exception {
+        mvc.perform(get("/other")).andExpect(status().isNotFound());
+        mvc.perform(post("/other")).andExpect(status().isNotFound());
     }
 }

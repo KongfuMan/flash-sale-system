@@ -3,6 +3,9 @@
     <option name="MAIN_CLASS_NAME" value="com.webapps.flashsale.MainApplication" />
     <module name="flashsale" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <envs>
+      <env name="SPRING_PROFILES_ACTIVE" value="dev" />
+    </envs>
     <method v="2">
       <option name="Make" enabled="true" />
     </method>

@@ -2,24 +2,24 @@
 
 一个 Spring Boot REST API 示例，使用内存数据库，无需外部数据库或 Docker。
 项目包含秒杀业务表的 JPA 实体和 Repository，以及读取所有订单的示例接口。
-历史 Flyway 迁移仍保留 `greeting_template` 表，以兼容已有迁移记录。
+原问候示例的 Flyway 迁移已移除；已有数据库中的表和迁移历史不会自动删除。
 
 ## 环境
 
 - JDK 17 或更高版本
 - Maven 3.6.3 或更高版本
 
-在本目录运行：
+连接本机 Citus 数据库运行：
 
 ```bash
-mvn spring-boot:run
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
 ## 环境配置
 
 `src/main/resources/application.properties` 保存所有环境共享的配置（包括默认端口 8081）。
 `application-dev.properties`、`application-test.properties` 和 `application-prod.properties`
-分别保存对应环境的覆盖配置；它们目前没有额外设置。
+分别保存对应环境的覆盖配置。
 
 通过 Spring profile 选择环境，例如：
 
@@ -28,8 +28,8 @@ mvn spring-boot:run -Dspring-boot.run.profiles=dev
 SPRING_PROFILES_ACTIVE=prod java -jar target/flashsale-0.0.1-SNAPSHOT.jar
 ```
 
-未指定 profile 时只使用共享配置。在 IntelliJ 的运行配置中可通过环境变量
-`SPRING_PROFILES_ACTIVE=dev` 选择开发环境。不要将密码或其他密钥提交到配置文件；
+未指定 profile 时使用 H2，且没有订单业务表。共享的 IntelliJ `FlashSale` 运行配置默认选择
+`dev` profile。不要将密码或其他密钥提交到配置文件；
 应通过环境变量或外部密钥管理系统提供。
 
 开发环境默认连接本机 Docker Citus coordinator：`localhost:5442/postgres`，用户为
@@ -42,9 +42,9 @@ SPRING_PROFILES_ACTIVE=prod java -jar target/flashsale-0.0.1-SNAPSHOT.jar
 
 - `entity` 和 `repository` 使用 Spring Data JPA 和 Hibernate 映射秒杀业务表。
 - `@RestControllerAdvice` 演示请求验证错误处理。
-- Spring Security 允许匿名 GET/HEAD 访问 `/actuator/health` 和 `/api/v1/orders`，其他请求被拒绝。订单接口返回所有订单，未分页且没有身份认证，仅供演示，不能用于生产数据。
+- Spring Security 允许所有匿名请求并禁用 CSRF 保护。订单接口没有身份认证，仅供演示，不能用于生产数据。
 - Actuator 提供健康检查和 Micrometer 指标。默认只公开健康检查；指标端点没有对外开放，应在配置认证和授权后再公开。
-- 默认环境中 Flyway 对临时 H2 内存数据库执行历史迁移；业务表目前只存在于外部数据库。真实部署需要配置持久数据库并验证对应数据库的迁移。
+- 项目当前没有 Flyway 迁移；业务表目前只存在于外部数据库。真实部署需要配置持久数据库并管理对应数据库的迁移。
 - `ExternalIntegrationClient` 演示外部 HTTPS 请求、超时和可选的进程内 TTL 缓存；默认禁用且不会在启动时发出请求。通过 `demo.integration.enabled`、`demo.integration.url`、`demo.integration.connect-timeout`、`demo.integration.request-timeout` 和 `demo.integration.cache-ttl` 配置。缓存不是分布式缓存。
 
 ## Bean Discovery vs Bean Definition
@@ -116,10 +116,13 @@ curl http://localhost:8081/actuator/health
 启动 `dev` profile 并连接现有 Citus 数据库后，可以请求订单列表：
 
 ```bash
-curl http://localhost:8081/api/v1/orders
+curl 'http://localhost:8081/api/v1/orders?page=0&size=20'
 ```
 
 默认 H2 数据库没有业务表，因此订单接口需要连接已初始化业务表的数据库。
+订单按 ID 升序分页，`page` 从 0 开始，`size` 默认 20、最大 100。响应包含 `orders`、
+`page`、`size`、`hasNext`，每个订单的 `items` 包含对应订单项。接口先查询订单页，
+再批量查询订单项；建议为 `order_items.order_id` 添加索引。已有数据库未自动修改。
 
 响应示例：
 
