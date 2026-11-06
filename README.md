@@ -1,6 +1,6 @@
 # Spring Boot Web Demo
 
-一个最小的 Spring Boot REST API 示例，不依赖数据库或 Docker。
+一个 Spring Boot REST API 示例，使用内存数据库，无需外部数据库或 Docker。
 
 ## 环境
 
@@ -12,6 +12,33 @@
 ```bash
 mvn spring-boot:run
 ```
+
+## 环境配置
+
+`src/main/resources/application.properties` 保存所有环境共享的配置（包括默认端口 8081）。
+`application-dev.properties`、`application-test.properties` 和 `application-prod.properties`
+分别保存对应环境的覆盖配置；它们目前没有额外设置。
+
+通过 Spring profile 选择环境，例如：
+
+```bash
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
+SPRING_PROFILES_ACTIVE=prod java -jar target/spring-boot-web-demo-0.0.1-SNAPSHOT.jar
+```
+
+未指定 profile 时只使用共享配置。在 IntelliJ 的运行配置中可通过环境变量
+`SPRING_PROFILES_ACTIVE=dev` 选择开发环境。不要将密码或其他密钥提交到配置文件；
+应通过环境变量或外部密钥管理系统提供。
+
+## 生产组件示例
+
+- `dto`、`domain`、`entity` 和 `mapper` 演示 API、领域模型和数据模型之间的分离；示例 entity 是普通 Java record，不是 JPA 实体。
+- `@Valid` 和 Bean Validation 验证请求；`@RestControllerAdvice` 返回统一的错误响应。
+- Spring Security 仅允许 GET/HEAD 访问问候接口和 `/actuator/health`，其他请求被拒绝。此示例没有配置身份认证，不能作为生产安全配置直接使用。
+- Actuator 提供健康检查和 Micrometer 指标。默认只公开健康检查；指标端点没有对外开放，应在配置认证和授权后再公开。
+- Flyway 在启动时对临时 H2 内存数据库执行 `db/migration` 中的迁移。数据重启后丢失；问候 DAO 仍使用固定值，不读取该表。真实部署需要配置持久数据库并验证对应数据库的迁移。
+- `GreetingService` 使用 SLF4J 记录不含请求数据的调试日志。
+- `ExternalIntegrationClient` 演示外部 HTTPS 请求、超时和可选的进程内 TTL 缓存；默认禁用且不会在启动时发出请求。通过 `demo.integration.enabled`、`demo.integration.url`、`demo.integration.connect-timeout`、`demo.integration.request-timeout` 和 `demo.integration.cache-ttl` 配置。缓存不是分布式缓存。
 
 ## Bean Discovery vs Bean Definition
 
@@ -76,8 +103,8 @@ public class AppConfig {
 另开终端请求接口：
 
 ```bash
-curl http://localhost:8081/api/greeting
-curl 'http://localhost:8081/api/greeting?name=Charles'
+curl http://localhost:8081/api/v1/greeting
+curl 'http://localhost:8081/api/v1/greeting?name=Charles'
 ```
 
 响应示例：
@@ -101,9 +128,15 @@ mvn test
 ## 阅读顺序
 
 1. `pom.xml`：Spring Boot Web 和测试依赖。
-2. `DemoApplication.java`：`@SpringBootApplication` 和应用入口。
-3. `GreetingController.java`：`@RestController`、GET 路由、查询参数和 JSON 响应。
-4. `GreetingControllerTest.java`：使用 `MockMvc` 验证 HTTP 路由和响应。
+2. `MainApplication.java`：`@SpringBootApplication` 和应用入口。
+3. `controller/GreetingController.java`：处理 GET 请求和 JSON 响应。
+4. `service/GreetingService.java`：生成问候语的业务逻辑。
+5. `repository/GreetingRepository.java`：向业务层提供问候语模板。
+6. `dao/GreetingDao.java`：提供模板数据，目前使用内存中的固定值。
+7. `GreetingControllerTest.java`：使用 `MockMvc` 验证 HTTP 路由和响应。
+
+调用链为 Controller → Service → Repository → DAO。当前 DAO 使用固定值，未连接数据库；
+Repository 和 DAO 在实际项目中通常可以合并，此处保留两层用于演示。
 
 `@RestController` 的返回值会由 Spring MVC 序列化为 JSON；内嵌的
 Tomcat 负责接收 HTTP 请求。服务默认监听 8081 端口。
