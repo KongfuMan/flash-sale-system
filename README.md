@@ -47,6 +47,25 @@ SPRING_PROFILES_ACTIVE=prod java -jar target/flashsale-0.0.1-SNAPSHOT.jar
 - 项目当前没有 Flyway 迁移；业务表目前只存在于外部数据库。真实部署需要配置持久数据库并管理对应数据库的迁移。
 - `ExternalIntegrationClient` 演示外部 HTTPS 请求、超时和可选的进程内 TTL 缓存；默认禁用且不会在启动时发出请求。通过 `demo.integration.enabled`、`demo.integration.url`、`demo.integration.connect-timeout`、`demo.integration.request-timeout` 和 `demo.integration.cache-ttl` 配置。缓存不是分布式缓存。
 
+## Grafana 监控
+
+`dev` profile 在 `http://localhost:8081/actuator/prometheus` 公开 Micrometer 指标。
+对于运行在 Docker Desktop 中的 Prometheus，可在其 `scrape_configs` 中添加：
+
+```yaml
+  - job_name: flashsale
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["host.docker.internal:8081"]
+```
+
+重新加载 Prometheus 配置后，在 Grafana 导入 `monitoring/grafana/flashsale-dashboard.json`，
+选择对应的 Prometheus 数据源。dashboard 包含 HTTP 请求速率、错误率、平均延迟、JVM、CPU
+连接池和 Tomcat HTTP 工作线程指标。HTTP 指标需要请求流量，速率图需要至少两次抓取。
+订单列表延迟图展示平均值、近似 p95/p99 和采样的滚动最大值；这些值基于查询时间窗口，
+与压测工具计算的整次运行结果可能不同。直方图会增加指标时间序列数量。
+当前 Spring Security 允许匿名访问，指标端点仅在 dev 中默认公开；其他环境应保护管理端点。
+
 ## Bean Discovery vs Bean Definition
 
 **Bean Discovery**指 Spring 找到需要注册的组件的一种方式。例如，
@@ -125,6 +144,24 @@ curl http://localhost:8081/api/v1/orders/1
 `page`、`size`、`hasNext`，每个订单的 `items` 包含对应订单项。接口先查询订单页，
 再批量查询订单项；建议为 `order_items.order_id` 添加索引。已有数据库未自动修改。
 按 ID 查询不存在的订单时返回 HTTP 404。
+
+## 预留订单
+
+`POST /api/v1/flash_sale_event/{eventId}/product/{eventProductId}` 接收 JSON：
+
+```json
+{"userId": 1, "idempotencyKey": "unique-request-key"}
+```
+
+事件 ID、活动商品 ID（`flash_sale_event_products.event_product_id`，不是 `product_id`）和用户 ID 必须为正整数，用户必须存在；幂等键不能为空白且最多 128 个字符。
+成功创建返回 `201` 和 `{"orderId": 123}`；相同幂等键和相同事件、活动商品、用户重试返回
+`200` 和原订单 ID。不同请求复用幂等键、事件未处于 `RUNNING`、活动商品不属于事件或库存不足返回
+`409`；输入无效返回 `400`。预留一个单位，订单状态为 `PENDING_PAYMENT`，30 分钟后过期。
+
+此接口使用 PostgreSQL SQL 和已有业务表及 `orders_idempotency_key_key` 唯一约束；默认 H2
+环境不支持此接口。它不执行迁移，也不创建订单项、支付或自动过期释放库存的任务，且**不执行每用户购买限制**。
+`userId` 由调用方提供，目前没有认证或授权，不能安全地用于生产。事件是否开放仅根据 `RUNNING`
+状态判断，不检查开始和结束时间。
 
 响应示例：
 
