@@ -53,7 +53,7 @@ public class ReservationService {
                     throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Event does not exist or is not running");
                 }
 
-                var ids = jdbc.queryForList("""
+                var orderIds = jdbc.queryForList("""
                         WITH reserved AS (
                             UPDATE flash_sale_event_products
                             SET reserved_quantity = reserved_quantity + 1
@@ -67,17 +67,24 @@ public class ReservationService {
                         FROM reserved
                         RETURNING order_id
                         """, params, Long.class);
-                if (ids.size() == 1){
-                    return new Result(ids.get(0), true);
+
+                if (orderIds.size() == 1){
+                    return new Result(orderIds.get(0), true);
                 }
 
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Product unavailable or out of stock");
             });
         } catch (DataAccessException ex) {
-            if (!isIdempotencyConflict(ex)) throw ex;
+            if (!isIdempotencyConflict(ex)) {
+                throw ex;
+            }
+
             // TransactionTemplate has rolled back the inventory update before this lookup.
             Result existing = transaction.execute(status -> findExisting(params));
-            if (existing != null) return existing;
+
+            if (existing != null) {
+                return existing;
+            }
             throw ex;
         }
     }

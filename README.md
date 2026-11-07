@@ -9,7 +9,7 @@
 - JDK 17 或更高版本
 - Maven 3.6.3 或更高版本
 
-连接本机 Citus 数据库运行：
+连接本机开发 PostgreSQL 数据库运行：
 
 ```bash
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
@@ -32,8 +32,8 @@ SPRING_PROFILES_ACTIVE=prod java -jar target/flashsale-0.0.1-SNAPSHOT.jar
 `dev` profile。不要将密码或其他密钥提交到配置文件；
 应通过环境变量或外部密钥管理系统提供。
 
-开发环境默认连接本机 Docker Citus coordinator：`localhost:5442/postgres`，用户为
-`postgres`。可通过 `CITUS_JDBC_URL`、`CITUS_USERNAME` 和 `CITUS_PASSWORD` 覆盖。
+开发环境默认连接本机 Docker PostgreSQL：`localhost:55432/flashsale`，用户为
+`flashsale`。可通过 `DB_JDBC_URL`、`DB_USERNAME` 和 `DB_PASSWORD` 覆盖。
 `dev` profile 默认禁用 Flyway，避免自动修改现有数据库；需要迁移时，请先确认目标数据库，
 然后显式启用 `spring.flyway.enabled`。
 在现有数据库中启用 Flyway 前，应先检查已有 schema 和 Flyway 历史记录。建议使用独立的开发数据库。
@@ -44,8 +44,20 @@ SPRING_PROFILES_ACTIVE=prod java -jar target/flashsale-0.0.1-SNAPSHOT.jar
 - `@RestControllerAdvice` 演示请求验证错误处理。
 - Spring Security 允许所有匿名请求并禁用 CSRF 保护。订单接口没有身份认证，仅供演示，不能用于生产数据。
 - Actuator 提供健康检查和 Micrometer 指标。默认只公开健康检查；指标端点没有对外开放，应在配置认证和授权后再公开。
-- 项目当前没有 Flyway 迁移；业务表目前只存在于外部数据库。真实部署需要配置持久数据库并管理对应数据库的迁移。
+- `db/migration/V3__capture_business_schema.sql` 是当前业务表的 PostgreSQL DDL 基线；Flyway 默认禁用，应作为受控部署步骤执行，而不是在应用启动时自动修改数据库。
 - `ExternalIntegrationClient` 演示外部 HTTPS 请求、超时和可选的进程内 TTL 缓存；默认禁用且不会在启动时发出请求。通过 `demo.integration.enabled`、`demo.integration.url`、`demo.integration.connect-timeout`、`demo.integration.request-timeout` 和 `demo.integration.cache-ttl` 配置。缓存不是分布式缓存。
+
+## 数据库迁移
+
+`V3__capture_business_schema.sql` 根据现有 coordinator 的业务表生成，包括表、约束和订单 ID
+序列；不包含业务数据、测试表或 Citus 扩展配置。当前这些表并未配置 Citus 分布。
+V1/V2 曾用于已移除的问候示例，因此没有复用这些版本号。新数据库可通过受控部署步骤执行
+Flyway `migrate`；迁移成功后，应使用 `validate` 并在相同的 PostgreSQL/Citus 版本上测试。
+
+现有开发数据库已有业务表，**不能直接执行 V3**，否则建表会失败。在确认 schema 与 V3 一致且
+检查 `flyway_schema_history` 后，才能为该数据库制定并执行 Flyway baseline 策略。已有 V1/V2
+历史的数据库需要单独处理缺失迁移，不能盲目 baseline 或 repair。不要在现有数据库执行 clean。
+`dev` profile 使用 Hibernate `validate` 检查实体映射，但不验证所有约束、索引或 Citus 配置。
 
 ## Grafana 监控
 
@@ -132,7 +144,7 @@ public class AppConfig {
 curl http://localhost:8081/actuator/health
 ```
 
-启动 `dev` profile 并连接现有 Citus 数据库后，可以请求订单列表：
+启动 `dev` profile 并连接已初始化的 PostgreSQL 数据库后，可以请求订单列表：
 
 ```bash
 curl 'http://localhost:8081/api/v1/orders?page=0&size=20'
@@ -162,6 +174,20 @@ curl http://localhost:8081/api/v1/orders/1
 环境不支持此接口。它不执行迁移，也不创建订单项、支付或自动过期释放库存的任务，且**不执行每用户购买限制**。
 `userId` 由调用方提供，目前没有认证或授权，不能安全地用于生产。事件是否开放仅根据 `RUNNING`
 状态判断，不检查开始和结束时间。
+
+## Simulated Payment
+
+`POST /api/v1/orders/{orderId}/payments` simulates a successful payment; it does not contact a payment provider or transfer money. For example:
+
+```json
+{"paymentId": 123, "transactionId": "unique-transaction", "paymentMethod": "demo"}
+```
+
+`paymentId` is a caller-supplied positive 64-bit integer; `transactionId` is required, nonblank and at most 128 characters. `paymentMethod` is optional and at most 30 characters. A successful request returns `201` with payment ID, order ID, transaction ID, amount and `SUCCESS` status. Unknown orders return `404`; expired or non-pending orders, missing reserved inventory, and duplicate payment or transaction IDs return `409`. Repeating a successful request is rejected, not replayed. Invalid input returns `400`.
+
+The amount is the **current** `flash_sale_event_products.flash_price` when inventory is updated, not a price captured at reservation: it can change between reservation and payment. The transaction locks the order, checks expiry using database time, moves one reserved unit to sold, records the payment and marks the order paid atomically. It requires the existing PostgreSQL-compatible business schema and uniqueness constraints; no schema or migration is created.
+
+**This endpoint is public and has no authentication or authorization. Anyone who can reach it can mark an eligible order paid without paying. Do not expose it publicly or use it with production data.**
 
 响应示例：
 
