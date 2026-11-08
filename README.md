@@ -241,6 +241,17 @@ mvn spring-boot:run -Dspring-boot.run.arguments=--server.port=8082
 mvn test
 ```
 
+`ReservationPostgresTest` 默认跳过。要运行它，必须指定一个全新、空的临时 PostgreSQL 数据库；
+该测试会执行迁移、写入数据并创建触发器，不能用于现有开发或生产数据库：
+
+```bash
+mvn test -Dtest=ReservationPostgresTest \
+  -Dreservation.test.url=jdbc:postgresql://localhost:PORT/postgres \
+  -Dreservation.test.user=postgres -Dreservation.test.password=disposable
+```
+
+每次运行需要新的空数据库。测试会在迁移前检查 `public` schema 是否为空。
+
 ## 阅读顺序
 
 1. `pom.xml`：Spring Boot Web 和测试依赖。

@@ -1,11 +1,12 @@
 package com.webapps.flashsale;
 
-import com.webapps.flashsale.controller.OrderController;
+import com.webapps.flashsale.controller.FlashSaleEventOrderController;
 import com.webapps.flashsale.dto.OrderResponse;
 import com.webapps.flashsale.dto.OrderItemResponse;
 import com.webapps.flashsale.dto.OrderPageResponse;
 import com.webapps.flashsale.security.SecurityConfiguration;
 import com.webapps.flashsale.service.OrderService;
+import com.webapps.flashsale.service.ReservationService;
 import java.util.List;
 import java.util.Optional;
 import java.math.BigDecimal;
@@ -21,18 +22,19 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@WebMvcTest(OrderController.class)
+@WebMvcTest(FlashSaleEventOrderController.class)
 @Import(SecurityConfiguration.class)
 class OrderControllerTest {
     @Autowired private MockMvc mvc;
     @MockitoBean private OrderService orders;
+    @MockitoBean private ReservationService reservations;
 
     @Test
     void returnsOrdersWithoutAuthentication() throws Exception {
         when(orders.getOrders(0, 20)).thenReturn(new OrderPageResponse(List.of(
                 new OrderResponse(1L, 2L, null, null, "PENDING", null, null, null,
                         List.of(new OrderItemResponse(5L, 6L, null, 2, new BigDecimal("19.99"))))), 0, 20, true));
-        mvc.perform(get("/api/v1/orders"))
+        mvc.perform(get("/api/v1/event/1/orders"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.orders[0].orderId").value(1))
                 .andExpect(jsonPath("$.orders[0].userId").value(2))
@@ -45,7 +47,7 @@ class OrderControllerTest {
     @Test
     void returnsEmptyArrayWhenNoOrdersExist() throws Exception {
         when(orders.getOrders(1, 5)).thenReturn(new OrderPageResponse(List.of(), 1, 5, false));
-        mvc.perform(get("/api/v1/orders").param("page", "1").param("size", "5"))
+        mvc.perform(get("/api/v1/event/1/orders").param("page", "1").param("size", "5"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.orders.length()").value(0))
                 .andExpect(jsonPath("$.page").value(1));
@@ -53,16 +55,16 @@ class OrderControllerTest {
 
     @Test
     void rejectsInvalidPagination() throws Exception {
-        mvc.perform(get("/api/v1/orders").param("page", "-1")).andExpect(status().isBadRequest());
-        mvc.perform(get("/api/v1/orders").param("size", "101")).andExpect(status().isBadRequest());
-        mvc.perform(get("/api/v1/orders").param("size", "0")).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/event/1/orders").param("page", "-1")).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/event/1/orders").param("size", "101")).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/event/1/orders").param("size", "0")).andExpect(status().isBadRequest());
     }
 
     @Test
     void returnsOrderByIdWithItems() throws Exception {
         when(orders.getOrder(1L)).thenReturn(Optional.of(new OrderResponse(1L, 2L, null, null,
                 "PENDING", null, null, null, List.of(new OrderItemResponse(5L, 6L, null, 2, new BigDecimal("19.99"))))));
-        mvc.perform(get("/api/v1/orders/1"))
+        mvc.perform(get("/api/v1/event/1/orders/1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.orderId").value(1))
                 .andExpect(jsonPath("$.items[0].orderItemId").value(5));
@@ -71,6 +73,6 @@ class OrderControllerTest {
     @Test
     void returnsNotFoundForMissingOrder() throws Exception {
         when(orders.getOrder(99L)).thenReturn(Optional.empty());
-        mvc.perform(get("/api/v1/orders/99")).andExpect(status().isNotFound());
+        mvc.perform(get("/api/v1/event/1/orders/99")).andExpect(status().isNotFound());
     }
 }

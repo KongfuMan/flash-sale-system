@@ -56,7 +56,7 @@ public class ReservationService {
                     throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Event does not exist or is not running");
                 }
 
-                // step 2. update inventory and place an order with order items.
+                // step 2. update inventory
                 var reserved = jdbc.query("""
                         UPDATE flash_sale_event_products
                         SET reserved_quantity = reserved_quantity + 1
@@ -76,6 +76,7 @@ public class ReservationService {
                     throw new IllegalStateException("Unexpected inventory update count: " + reserved.size());
                 }
 
+                // step3. place an order with associated items.
                 var orderIds = jdbc.queryForList("""
                         INSERT INTO orders (user_id, event_id, event_product_id, status, idempotency_key, expires_at)
                         VALUES (:userId, :eventId, :eventProductId, 'PENDING_PAYMENT',
