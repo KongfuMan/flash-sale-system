@@ -9,7 +9,7 @@
 - JDK 17 或更高版本
 - Maven 3.6.3 或更高版本
 
-连接本机开发 PostgreSQL 数据库运行：
+连接本机 Citus 数据库运行：
 
 ```bash
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
@@ -32,8 +32,9 @@ SPRING_PROFILES_ACTIVE=prod java -jar target/flashsale-0.0.1-SNAPSHOT.jar
 `dev` profile。不要将密码或其他密钥提交到配置文件；
 应通过环境变量或外部密钥管理系统提供。
 
-开发环境默认连接本机 Docker PostgreSQL：`localhost:55432/flashsale`，用户为
-`flashsale`。可通过 `DB_JDBC_URL`、`DB_USERNAME` 和 `DB_PASSWORD` 覆盖。
+开发环境默认连接本机 Docker Citus coordinator：`localhost:5442/postgres`，用户为
+`postgres`。可通过 `DB_JDBC_URL`、`DB_USERNAME` 和 `DB_PASSWORD` 覆盖。
+当前 Citus schema 尚缺少 `password_hash` 和订单项 ID 序列；使用相关功能前需安全协调迁移。
 `dev` profile 默认禁用 Flyway，避免自动修改现有数据库；需要迁移时，请先确认目标数据库，
 然后显式启用 `spring.flyway.enabled`。
 在现有数据库中启用 Flyway 前，应先检查已有 schema 和 Flyway 历史记录。建议使用独立的开发数据库。
@@ -44,20 +45,53 @@ SPRING_PROFILES_ACTIVE=prod java -jar target/flashsale-0.0.1-SNAPSHOT.jar
 - `@RestControllerAdvice` 演示请求验证错误处理。
 - Spring Security 允许所有匿名请求并禁用 CSRF 保护。订单接口没有身份认证，仅供演示，不能用于生产数据。
 - Actuator 提供健康检查和 Micrometer 指标。默认只公开健康检查；指标端点没有对外开放，应在配置认证和授权后再公开。
-- `db/migration/V3__capture_business_schema.sql` 是当前业务表的 PostgreSQL DDL 基线；Flyway 默认禁用，应作为受控部署步骤执行，而不是在应用启动时自动修改数据库。
+- `db/migration/V1__capture_business_schema.sql` 是当前业务表的 PostgreSQL DDL 基线；Flyway 默认禁用，应作为受控部署步骤执行，而不是在应用启动时自动修改数据库。
 - `ExternalIntegrationClient` 演示外部 HTTPS 请求、超时和可选的进程内 TTL 缓存；默认禁用且不会在启动时发出请求。通过 `demo.integration.enabled`、`demo.integration.url`、`demo.integration.connect-timeout`、`demo.integration.request-timeout` 和 `demo.integration.cache-ttl` 配置。缓存不是分布式缓存。
 
 ## 数据库迁移
 
-`V3__capture_business_schema.sql` 根据现有 coordinator 的业务表生成，包括表、约束和订单 ID
+`V1__capture_business_schema.sql` 根据现有 coordinator 的业务表生成，包括表、约束和订单 ID
 序列；不包含业务数据、测试表或 Citus 扩展配置。当前这些表并未配置 Citus 分布。
-V1/V2 曾用于已移除的问候示例，因此没有复用这些版本号。新数据库可通过受控部署步骤执行
+新的 V1 基线复用了旧问候示例曾使用的版本号，仅适用于全新数据库。新数据库可通过受控部署步骤执行
 Flyway `migrate`；迁移成功后，应使用 `validate` 并在相同的 PostgreSQL/Citus 版本上测试。
 
-现有开发数据库已有业务表，**不能直接执行 V3**，否则建表会失败。在确认 schema 与 V3 一致且
-检查 `flyway_schema_history` 后，才能为该数据库制定并执行 Flyway baseline 策略。已有 V1/V2
-历史的数据库需要单独处理缺失迁移，不能盲目 baseline 或 repair。不要在现有数据库执行 clean。
-`dev` profile 使用 Hibernate `validate` 检查实体映射，但不验证所有约束、索引或 Citus 配置。
+本机全新 PostgreSQL 容器可执行以下命令（仅适用于该开发容器）：
+
+```bash
+mvn org.flywaydb:flyway-maven-plugin:11.7.2:migrate -Dflyway.url=jdbc:postgresql://127.0.0.1:55432/flashsale -Dflyway.user=flashsale -Dflyway.password=flashsale-local-dev
+mvn org.flywaydb:flyway-maven-plugin:11.7.2:validate -Dflyway.url=jdbc:postgresql://127.0.0.1:55432/flashsale -Dflyway.user=flashsale -Dflyway.password=flashsale-local-dev
+```
+
+现有开发数据库已有业务表，**不能直接执行 V1**，否则建表会失败。旧版 V1/V2 和 V3/V4 历史
+与新的 V1 不兼容，必须先检查 schema、备份及 `flyway_schema_history`，制定专门的协调策略。
+不要盲目 baseline 或 repair，也不要在现有数据库执行 clean。
+`dev` profile 当前不启用 Hibernate schema 校验，因为 Citus 尚未完成 schema 更新。
+
+`db/dev/R__seed.sql` 是根据本地 Citus 记录生成的开发环境 Flyway repeatable migration，生产部署默认
+不会加载。仅在专用开发数据库、应用写入停止时，通过同时指定 schema 和 dev 两个 Flyway location 执行；脚本包含
+显式订单 ID 并调整序列。脚本可重复执行，但 `ON CONFLICT DO NOTHING` 不会修复已有不一致数据。
+源数据没有产品库存字段，因此 `total_inventory` 使用 0 占位；原有日期、过期订单和保留库存数量
+按快照保留，可能不适合直接测试新订单。种子不包含密码哈希。
+V1 包含 `unit_price`、`password_hash` 和订单项 ID 序列，保留其他产品列；此基线仅供全新数据库使用。
+已经应用开发种子的数据库后续运行 Flyway 时也应包含 `db/dev` location，否则校验可能因缺失已应用迁移而失败。
+
+```bash
+FLYWAY_URL=jdbc:postgresql://localhost:5442/postgres FLYWAY_USER=postgres FLYWAY_PASSWORD=postgres \
+  mvn org.flywaydb:flyway-maven-plugin:11.7.2:migrate \
+  -Dflyway.locations=filesystem:src/main/resources/db/migration,filesystem:src/main/resources/db/dev
+```
+
+### GitLab CI/CD
+
+`.gitlab-ci.yml` 先执行 Maven `verify`，在受保护的默认分支上提供手动生产迁移任务；
+Flyway 成功后才发布应用 JAR。此流程不启动或部署应用，发布的制品供后续部署流程使用。
+在 GitLab 中保护默认分支和 `production` 环境，配置所需审批，并设置受保护、受限环境范围的
+CI/CD 变量 `FLYWAY_URL`、`FLYWAY_USER` 和 `FLYWAY_PASSWORD`。密码应设为 masked/hidden，
+数据库迁移账户应与应用运行账户分离；runner 必须能够安全访问目标数据库。
+
+首次使用前检查目标 schema 和 Flyway 历史，尤其是旧版 V1/V2 和 V3/V4；不要自动 baseline、repair
+或 clean。生产迁移应先在与生产相同的数据库版本和代表性数据上验证，并确保迁移与仍在运行的旧版
+应用兼容。当前应用的匿名安全配置不适合生产部署。
 
 ## Grafana 监控
 
