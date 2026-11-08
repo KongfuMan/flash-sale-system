@@ -1,9 +1,10 @@
--- Snapshot of the coordinator's local business tables. Citus distribution is
+-- Initial schema based on the coordinator's local business tables. Citus distribution is
 -- intentionally absent: none of these tables is distributed or a reference table.
 
 CREATE TABLE public.users (
     user_id bigint NOT NULL,
     username character varying(50) NOT NULL,
+    password_hash varchar(255),
     created_at timestamp without time zone DEFAULT now(),
     CONSTRAINT users_pkey PRIMARY KEY (user_id)
 );
@@ -12,9 +13,11 @@ CREATE TABLE public.products (
     product_id bigint NOT NULL,
     name character varying(255) NOT NULL,
     total_inventory integer NOT NULL,
+    unit_price real NOT NULL DEFAULT 0.0,
     created_at timestamp without time zone DEFAULT now(),
     updated_at timestamp without time zone DEFAULT now(),
     CONSTRAINT products_total_inventory_check CHECK (total_inventory >= 0),
+    CONSTRAINT products_unit_price_check CHECK (unit_price >= 0),
     CONSTRAINT products_pkey PRIMARY KEY (product_id)
 );
 
@@ -91,6 +94,11 @@ CREATE TABLE public.order_items (
     CONSTRAINT order_items_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(order_id) ON DELETE CASCADE,
     CONSTRAINT order_items_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(product_id) ON DELETE RESTRICT
 );
+
+CREATE SEQUENCE public.order_items_order_item_id_seq AS bigint;
+ALTER SEQUENCE public.order_items_order_item_id_seq OWNED BY public.order_items.order_item_id;
+ALTER TABLE ONLY public.order_items ALTER COLUMN order_item_id
+    SET DEFAULT nextval('public.order_items_order_item_id_seq'::regclass);
 
 CREATE TABLE public.order_payment (
     payment_id bigint NOT NULL,

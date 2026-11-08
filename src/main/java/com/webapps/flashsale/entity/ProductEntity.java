@@ -14,6 +14,8 @@ public class ProductEntity {
     public String name;
     @Column(name = "total_inventory", nullable = false)
     public Integer totalInventory;
+    @Column(name = "unit_price", nullable = false)
+    public Float unitPrice;
     @Column(name = "created_at")
     public LocalDateTime createdAt;
     @Column(name = "updated_at")

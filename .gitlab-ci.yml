@@ -1,0 +1,61 @@
+stages:
+  - build
+  - migrate
+  - publish
+
+default:
+  image: maven:3.9.9-eclipse-temurin-17
+
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+
+cache:
+  key: maven-dependencies
+  paths:
+    - .m2/repository/
+
+build:
+  stage: build
+  script:
+    - mvn --batch-mode --no-transfer-progress verify
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - target/flashsale-*.jar
+    reports:
+      junit: target/surefire-reports/TEST-*.xml
+
+migrate_production:
+  stage: migrate
+  environment:
+    name: production
+    action: prepare
+  resource_group: production-database
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_REF_PROTECTED == "true"'
+      when: manual
+      allow_failure: false
+    - when: never
+  script:
+    - ': "${FLYWAY_URL:?Set the production JDBC URL}"'
+    - ': "${FLYWAY_USER:?Set the migration database user}"'
+    - ': "${FLYWAY_PASSWORD:?Set the migration database password}"'
+    - mvn --batch-mode --no-transfer-progress org.flywaydb:flyway-maven-plugin:11.7.2:migrate
+
+publish_production_artifact:
+  stage: publish
+  needs:
+    - job: build
+      artifacts: true
+    - job: migrate_production
+      artifacts: false
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_REF_PROTECTED == "true"'
+    - when: never
+  script:
+    - test -f target/flashsale-0.0.1-SNAPSHOT.jar
+  artifacts:
+    name: "flashsale-$CI_COMMIT_SHA"
+    expire_in: 30 days
+    paths:
+      - target/flashsale-0.0.1-SNAPSHOT.jar

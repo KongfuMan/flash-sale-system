@@ -2,6 +2,7 @@ package com.webapps.flashsale;
 
 import com.webapps.flashsale.service.ReservationService;
 import java.sql.ResultSet;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,6 +12,7 @@ import org.postgresql.util.ServerErrorMessage;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.SimpleTransactionStatus;
@@ -32,15 +34,27 @@ class ReservationServiceTest {
     }
 
     @Test
-    void createsReservation() {
-        when(jdbc.query(anyString(), anyMap(), any(RowMapper.class))).thenReturn(List.of());
-        when(jdbc.queryForList(contains("FROM users"), anyMap(), eq(Long.class))).thenReturn(List.of(3L));
+    void createsReservation() throws Exception {
+        when(jdbc.query(contains("FROM orders"), anyMap(), any(RowMapper.class))).thenReturn(List.of());
         when(jdbc.queryForList(contains("FROM flash_sale_events"), anyMap(), eq(Long.class))).thenReturn(List.of(1L));
-        when(jdbc.queryForList(contains("WITH reserved"), anyMap(), eq(Long.class))).thenReturn(List.of(42L));
+        stubInventory();
+        when(jdbc.queryForList(contains("INSERT INTO orders"), anyMap(), eq(Long.class))).thenReturn(List.of(42L));
+        when(jdbc.update(contains("INSERT INTO order_items"), any(MapSqlParameterSource.class))).thenReturn(1);
         assertEquals(new ReservationService.Result(42, true), service.reserve(1, 2, 3, "key"));
-        verify(jdbc).queryForList(contains("event_id = :eventId AND event_product_id = :eventProductId"),
-                argThat((Map<String, ?> params) -> Long.valueOf(2).equals(params.get("eventProductId"))), eq(Long.class));
+        verify(jdbc).update(contains("INSERT INTO order_items"), argThat((MapSqlParameterSource params) ->
+                Long.valueOf(42).equals(params.getValue("orderId"))
+                        && Long.valueOf(7).equals(params.getValue("productId"))
+                        && Long.valueOf(2).equals(params.getValue("eventProductId"))
+                        && new BigDecimal("12.34").equals(params.getValue("flashPrice"))));
         verify(manager).commit(any());
+    }
+
+    private void stubInventory() throws Exception {
+        ResultSet rs = mock(ResultSet.class);
+        when(rs.getLong("product_id")).thenReturn(7L);
+        when(rs.getBigDecimal("flash_price")).thenReturn(new BigDecimal("12.34"));
+        when(jdbc.query(contains("UPDATE flash_sale_event_products"), anyMap(), any(RowMapper.class)))
+                .thenAnswer(inv -> List.of(((RowMapper<?>) inv.getArgument(2)).mapRow(rs, 0)));
     }
 
     @Test
@@ -50,11 +64,11 @@ class ReservationServiceTest {
         when(rs.getLong("event_product_id")).thenReturn(2L);
         when(rs.getLong("user_id")).thenReturn(3L);
         when(rs.getLong("order_id")).thenReturn(42L);
-        when(jdbc.query(anyString(), anyMap(), any(RowMapper.class))).thenReturn(List.of())
+        when(jdbc.query(contains("FROM orders"), anyMap(), any(RowMapper.class))).thenReturn(List.of())
                 .thenAnswer(inv -> List.of(((RowMapper<?>) inv.getArgument(2)).mapRow(rs, 0)));
         when(jdbc.queryForList(contains("FROM users"), anyMap(), eq(Long.class))).thenReturn(List.of(3L));
         when(jdbc.queryForList(contains("FROM flash_sale_events"), anyMap(), eq(Long.class))).thenReturn(List.of(1L));
-        when(jdbc.queryForList(contains("WITH reserved"), anyMap(), eq(Long.class))).thenReturn(List.of());
+        when(jdbc.query(contains("UPDATE flash_sale_event_products"), anyMap(), any(RowMapper.class))).thenReturn(List.of());
         assertEquals(new ReservationService.Result(42, false), service.reserve(1, 2, 3, "key"));
     }
 
@@ -66,11 +80,25 @@ class ReservationServiceTest {
     }
 
     @Test
-    void rejectsMissingUser() {
-        when(jdbc.query(anyString(), anyMap(), any(RowMapper.class))).thenReturn(List.of());
-        when(jdbc.queryForList(contains("FROM users"), anyMap(), eq(Long.class))).thenReturn(List.of());
-        var error = assertThrows(ResponseStatusException.class, () -> service.reserve(1, 2, 3, "key"));
-        assertEquals(400, error.getStatusCode().value());
+    void rollsBackUnexpectedOrderOrItemCounts() throws Exception {
+        when(jdbc.query(contains("FROM orders"), anyMap(), any(RowMapper.class))).thenReturn(List.of());
+        when(jdbc.queryForList(contains("FROM flash_sale_events"), anyMap(), eq(Long.class))).thenReturn(List.of(1L));
+        stubInventory();
+        when(jdbc.queryForList(contains("INSERT INTO orders"), anyMap(), eq(Long.class)))
+                .thenReturn(List.of(), List.of(42L));
+        assertThrows(IllegalStateException.class, () -> service.reserve(1, 2, 3, "key"));
+        assertThrows(IllegalStateException.class, () -> service.reserve(1, 2, 3, "key"));
+        verify(manager, times(2)).rollback(any());
+        verify(manager, never()).commit(any());
+    }
+
+    @Test
+    void rollsBackUnexpectedInventoryCount() throws Exception {
+        when(jdbc.query(contains("FROM orders"), anyMap(), any(RowMapper.class))).thenReturn(List.of());
+        when(jdbc.queryForList(contains("FROM flash_sale_events"), anyMap(), eq(Long.class))).thenReturn(List.of(1L));
+        when(jdbc.query(contains("UPDATE flash_sale_event_products"), anyMap(), any(RowMapper.class)))
+                .thenReturn(List.of(new Object(), new Object()));
+        assertThrows(IllegalStateException.class, () -> service.reserve(1, 2, 3, "key"));
         verify(manager).rollback(any());
     }
 
@@ -81,7 +109,7 @@ class ReservationServiceTest {
         when(rs.getLong("event_product_id")).thenReturn(2L);
         when(rs.getLong("user_id")).thenReturn(3L);
         when(rs.getLong("order_id")).thenReturn(42L);
-        when(jdbc.query(anyString(), anyMap(), any(RowMapper.class))).thenReturn(List.of())
+        when(jdbc.query(contains("FROM orders"), anyMap(), any(RowMapper.class))).thenReturn(List.of())
                 .thenAnswer(inv -> {
                     verify(manager).rollback(any());
                     return List.of(((RowMapper<?>) inv.getArgument(2)).mapRow(rs, 0));
@@ -89,7 +117,8 @@ class ReservationServiceTest {
         when(jdbc.queryForList(contains("FROM users"), anyMap(), eq(Long.class))).thenReturn(List.of(3L));
         when(jdbc.queryForList(contains("FROM flash_sale_events"), anyMap(), eq(Long.class))).thenReturn(List.of(1L));
         var pg = new PSQLException(new ServerErrorMessage("SERROR\0C23505\0norders_idempotency_key_key\0Mduplicate\0\0"));
-        when(jdbc.queryForList(contains("WITH reserved"), anyMap(), eq(Long.class)))
+        stubInventory();
+        when(jdbc.queryForList(contains("INSERT INTO orders"), anyMap(), eq(Long.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate", pg));
         assertEquals(new ReservationService.Result(42, false), service.reserve(1, 2, 3, "key"));
         verify(manager).commit(any());

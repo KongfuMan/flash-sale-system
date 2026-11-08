@@ -17,9 +17,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 @SpringBootTest
 @ActiveProfiles("dev")
-@EnabledIfSystemProperty(named = "citus.integration", matches = "true")
+@EnabledIfSystemProperty(named = "postgres.integration", matches = "true")
 @Transactional(readOnly = true)
-class CitusRepositoryIntegrationTest {
+class PostgresRepositoryIntegrationTest {
     @Autowired private UserRepository users;
     @Autowired private ProductRepository products;
     @Autowired private FlashSaleEventRepository events;
