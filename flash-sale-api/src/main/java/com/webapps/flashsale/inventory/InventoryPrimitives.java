@@ -62,7 +62,7 @@ public class InventoryPrimitives {
         args.add(event.status);
         for (FlashSaleEventProductEntity row : eventProducts) {
             long available = (long) row.allocatedQuantity - row.soldQuantity - row.reservedQuantity;
-            args.add("p:" + row.eventProductId);
+            args.add("prod:" + row.eventProductId);
             args.add(Long.toString(available));
         }
         Long result = redis.execute(PREFILL, List.of(key), args.toArray());

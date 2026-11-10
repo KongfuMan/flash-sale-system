@@ -30,6 +30,23 @@ class InventoryPrimitivesTest {
         verifyNoInteractions(redis);
     }
 
+    @Test void prefillsProductStockUsingProdPrefix() {
+        var event = new FlashSaleEventEntity();
+        event.status = "RUNNING";
+        var product = new FlashSaleEventProductEntity();
+        product.eventProductId = 2L;
+        product.allocatedQuantity = 10;
+        product.soldQuantity = 2;
+        product.reservedQuantity = 1;
+        when(events.findById(1L)).thenReturn(Optional.of(event));
+        when(products.findByEventId(eq(1L), any(Pageable.class))).thenReturn(List.of(product));
+        when(redis.execute(any(RedisScript.class), anyList(), any(Object[].class))).thenReturn(1L);
+
+        assertTrue(inventory.prefill(1));
+        verify(redis).execute(any(RedisScript.class), eq(List.of("flashsale:inventory:v1:{event:1}")),
+                eq("status"), eq("RUNNING"), eq("prod:2"), eq("7"));
+    }
+
     @Test void mapsReserveFailuresAndRejectsInvalidIds() {
         when(redis.execute(any(RedisScript.class), anyList(), any(Object[].class))).thenReturn(
                 "MISSING_EVENT", "INVALID_STATE", "EVENT_NOT_RUNNING", "MISSING_PRODUCT",

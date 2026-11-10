@@ -209,10 +209,12 @@ curl http://localhost:8081/api/v1/orders/1
 `InventoryPrimitives` 独立于订单和 `ReservationService`，不会在启动时自动预加载。
 `reserve(eventId, eventProductId, userId, idempotencyKey)` 是独立 Java API：ID 为正的 64 位整数，键非空白且最多 128 个字符。
 同一活动内相同键和绑定重试返回 `REPLAY`，不同商品或用户返回 `CONFLICT`；即使活动已结束或库存为零也先检查重试。
-首次成功返回 `RESERVED`，在同一 hash 中以一次 `HSET` 同时扣减库存并写入 `i:<sha256-hex-of-UTF8-key>` JSON
+首次成功返回 `RESERVED`，在同一 hash 中以一次 `HSET` 同时扣减库存并写入 `idem:<sha256-hex-of-UTF8-key>` JSON
 待处理记录。记录包含版本、绑定、原始幂等键、确定性 requestId（SHA-256，输入为活动 ID、冒号和原始键的 UTF-8）、
 `PENDING` 状态和消息载荷；ID 存为字符串。原始键是敏感数据，必须限制 Redis 读取和日志访问。
-记录无 TTL、不自动删除，空间会持续增长；未知或损坏记录失败关闭。不同活动允许使用相同键，但 PostgreSQL 的
+记录无 TTL、不自动删除，空间会持续增长；未知或损坏记录失败关闭。脚本不再读取旧 `i:` 标记；切换前必须停止所有
+写入并等待在途操作结束，安全迁移和核对旧标记后才能使用 `idem:`。旧版写入方也不能与新版混合运行。
+不同活动允许使用相同键，但 PostgreSQL 的
 `orders_idempotency_key_key` 是全局唯一约束，这两种语义不兼容；在设计并解决此冲突之前禁止接入 Kafka 或订单处理。
 
 这些记录只是 Redis hash 字段，不是 Redis Stream；没有 relay 或 Kafka 发布，也没有连接到下述独立消费者。Redis 与数据库不构成
@@ -235,7 +237,8 @@ SPRING_PROFILES_ACTIVE=dev mvn -f flash-sale-api/pom.xml compile exec:java -Dexe
 dev 的 `REDIS_CLUSTER_NODES` 可覆盖默认的三个集群种子节点；连接使用 Redis Cluster 拓扑发现。
 读取 `flash_sale_events` 和 `flash_sale_event_products`，每个活动最多 1000 个商品，库存为
 `allocated_quantity - sold_quantity - reserved_quantity`。新 hash 为 `flashsale:inventory:v1:{event:<id>}`，
-字段 `status` 和 `p:<event_product_id>` 一次 Lua 写入，不设置 TTL；已有 key 一律拒绝覆盖。
+字段 `status` 和 `prod:<event_product_id>` 一次 Lua 写入，不设置 TTL；已有 key 一律拒绝覆盖。
+已有 Redis hash 的旧 `p:` 库存字段不会被新脚本读取；切换前须停止所有写入、迁移并核对库存字段，不能混合运行新旧写入方。
 状态是预加载快照，后续数据库状态变化不会同步。只有快照状态为 `RUNNING` 才能扣减；缺 key、缺商品、
 非法库存和库存不足均返回明确结果，不会隐式初始化。它不检查活动时间、用户限制或订单，也不提供重建流程。
 原有 `--event-id 1` 命令仍是预加载的兼容形式。
@@ -360,7 +363,7 @@ Only once quiescence and database outcomes are proven, rebuild or correct the ha
 the database: `schema` must be `1`, and each `s:<eventId>:<eventProductId>` field is
 `allocated_quantity - sold_quantity - reserved_quantity`, a nonnegative decimal integer
 at most 999999999999999. Provision missing state manually, without TTL, using a controlled
-Redis client. Preserve completed markers, or reconstruct `i:<sha256-hex-of-UTF8-key>` as
+Redis client. Preserve completed markers, or reconstruct `idem:<sha256-hex-of-UTF8-key>` as
 `<eventId>:<eventProductId>:<userId>:D:<orderId>` from verified orders. Resolve pending
 markers individually against PostgreSQL; clear a stale marker only after proving no
 commit can occur and accounting for its inventory. Never clear completed markers without
