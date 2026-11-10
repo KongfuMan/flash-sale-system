@@ -3,7 +3,6 @@ package com.webapps.flashsale;
 import com.webapps.flashsale.controller.OrderController;
 import com.webapps.flashsale.exception.GlobalExceptionHandler;
 import com.webapps.flashsale.service.OrderService;
-import com.webapps.flashsale.service.ReservationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
@@ -21,12 +20,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 class GlobalExceptionHandlerTest {
     private final OrderService orders = mock(OrderService.class);
-    private final ReservationService reservations = mock(ReservationService.class);
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        mvc = MockMvcBuilders.standaloneSetup(new OrderController(orders, reservations))
+        mvc = MockMvcBuilders.standaloneSetup(new OrderController(orders))
                 .setControllerAdvice(new GlobalExceptionHandler()).build();
     }
 
@@ -43,7 +41,7 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void preservesExplicitStatusAndReason() throws Exception {
-        when(reservations.reserve(anyLong(), anyLong(), anyLong(), anyString()))
+        when(orders.reserve(anyLong(), anyLong(), anyLong(), anyString()))
                 .thenThrow(new ResponseStatusException(HttpStatus.CONFLICT, "Out of stock"));
         mvc.perform(post("/api/v1/flash_sale_event/1/product/2").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"userId\":3,\"idempotencyKey\":\"key\"}"))

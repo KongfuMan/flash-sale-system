@@ -2,6 +2,7 @@ package com.webapps.flashsale;
 
 import com.webapps.flashsale.entity.OrderEntity;
 import com.webapps.flashsale.entity.OrderItemEntity;
+import com.webapps.flashsale.inventory.InventoryPrimitives;
 import com.webapps.flashsale.repository.OrderItemRepository;
 import com.webapps.flashsale.repository.OrderRepository;
 import com.webapps.flashsale.service.OrderService;
@@ -22,7 +23,7 @@ import static org.mockito.Mockito.when;
 class OrderServiceTest {
     private final OrderRepository orders = mock(OrderRepository.class);
     private final OrderItemRepository items = mock(OrderItemRepository.class);
-    private final OrderService service = new OrderService(orders, items);
+    private final OrderService service = new OrderService(orders, items, mock(InventoryPrimitives.class));
 
     @Test
     void groupsItemsInOneQueryAndKeepsOrdersWithoutItems() {

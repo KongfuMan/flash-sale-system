@@ -1,6 +1,6 @@
-package com.webapps.flashsale;
+package com.webapps.consumer;
 
-import com.webapps.flashsale.service.ReservationService;
+import com.webapps.consumer.service.OrderService;
 import java.sql.ResultSet;
 import java.math.BigDecimal;
 import java.util.List;
@@ -22,15 +22,15 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-class ReservationServiceTest {
+class OrderServiceTest {
     private final NamedParameterJdbcTemplate jdbc = mock(NamedParameterJdbcTemplate.class);
     private final PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
-    private ReservationService service;
+    private OrderService service;
 
     @BeforeEach
     void setUp() {
         when(manager.getTransaction(any(TransactionDefinition.class))).thenAnswer(inv -> new SimpleTransactionStatus());
-        service = new ReservationService(jdbc, manager);
+        service = new OrderService(jdbc, manager);
     }
 
     @Test
@@ -40,7 +40,7 @@ class ReservationServiceTest {
         stubInventory();
         when(jdbc.queryForList(contains("INSERT INTO orders"), anyMap(), eq(Long.class))).thenReturn(List.of(42L));
         when(jdbc.update(contains("INSERT INTO order_items"), any(MapSqlParameterSource.class))).thenReturn(1);
-        assertEquals(new ReservationService.Result(42, true), service.reserve(1, 2, 3, "key"));
+        assertEquals(new OrderService.Result(42, true), service.reserve(1, 2, 3, "key"));
         verify(jdbc).update(contains("INSERT INTO order_items"), argThat((MapSqlParameterSource params) ->
                 Long.valueOf(42).equals(params.getValue("orderId"))
                         && Long.valueOf(7).equals(params.getValue("productId"))
@@ -69,7 +69,7 @@ class ReservationServiceTest {
         when(jdbc.queryForList(contains("FROM users"), anyMap(), eq(Long.class))).thenReturn(List.of(3L));
         when(jdbc.queryForList(contains("FROM flash_sale_events"), anyMap(), eq(Long.class))).thenReturn(List.of(1L));
         when(jdbc.query(contains("UPDATE flash_sale_event_products"), anyMap(), any(RowMapper.class))).thenReturn(List.of());
-        assertEquals(new ReservationService.Result(42, false), service.reserve(1, 2, 3, "key"));
+        assertEquals(new OrderService.Result(42, false), service.reserve(1, 2, 3, "key"));
     }
 
     @Test
@@ -120,7 +120,7 @@ class ReservationServiceTest {
         stubInventory();
         when(jdbc.queryForList(contains("INSERT INTO orders"), anyMap(), eq(Long.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate", pg));
-        assertEquals(new ReservationService.Result(42, false), service.reserve(1, 2, 3, "key"));
+        assertEquals(new OrderService.Result(42, false), service.reserve(1, 2, 3, "key"));
         verify(manager).commit(any());
     }
 

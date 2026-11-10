@@ -1,7 +1,11 @@
-package com.webapps.flashsale.service;
+package com.webapps.consumer.service;
 
+import com.webapps.flashsale.contract.MessageEnvelope;
+import com.webapps.flashsale.contract.OrderRequested;
 import java.math.BigDecimal;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.postgresql.util.PSQLException;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
@@ -14,7 +18,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
-public class ReservationService {
+public class OrderService {
+    private static final Logger log = LoggerFactory.getLogger(OrderService.class);
     public static final String EventId = "eventId";
     public static final String EventProductId = "eventProductId";
     public static final String UserId = "userId";
@@ -23,11 +28,28 @@ public class ReservationService {
     private final NamedParameterJdbcTemplate jdbc;
     private final TransactionTemplate transaction;
 
-    public ReservationService(NamedParameterJdbcTemplate jdbc, PlatformTransactionManager manager) {
+    public OrderService(NamedParameterJdbcTemplate jdbc, PlatformTransactionManager manager) {
         this.jdbc = jdbc;
         this.transaction = new TransactionTemplate(manager);
         this.transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+    }
+
+    public void handleOrderRequested(MessageEnvelope<OrderRequested> event) {
+        if (event.messageId() == null || event.occurredAt() == null || event.data() == null
+                || event.data().flashSaleEventId() == null || event.data().flashSaleEventId() <= 0
+                || event.data().userId() == null || event.data().userId() <= 0
+                || event.data().items() == null || event.data().items().size() != 1
+                || event.data().items().get(0) == null
+                || event.data().items().get(0).eventProductId() == null
+                || event.data().items().get(0).eventProductId() <= 0
+                || !Integer.valueOf(1).equals(event.data().items().get(0).quantity())) {
+            throw new IllegalArgumentException("Invalid OrderRequested message");
+        }
+        var request = event.data();
+        var result = reserve(request.flashSaleEventId(), request.items().get(0).eventProductId(), request.userId(),
+                "kafka:" + event.messageId());
+        log.info("Processed message {} for order {}", event.messageId(), result.orderId());
     }
 
     public Result reserve(long eventId, long eventProductId, long userId, String idempotencyKey) {

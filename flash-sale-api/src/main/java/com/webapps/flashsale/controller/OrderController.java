@@ -2,27 +2,23 @@ package com.webapps.flashsale.controller;
 
 import com.webapps.flashsale.dto.OrderPageResponse;
 import com.webapps.flashsale.dto.OrderResponse;
-import com.webapps.flashsale.dto.ReservationResponse;
+import com.webapps.flashsale.dto.ErrorResponse;
 import com.webapps.flashsale.service.OrderService;
-import com.webapps.flashsale.service.ReservationService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 @RestController
-@RequestMapping("/api/v1/event/")
+@RequestMapping("/api/v1/flash_sale_event/")
 public class OrderController {
     private final OrderService orders;
-    private final ReservationService reservations;
-
-    public OrderController(OrderService orders, ReservationService reservations) {
+    public OrderController(OrderService orders) {
         this.orders = orders;
-        this.reservations = reservations;
     }
 
-    @GetMapping("{eventId}/orders")
-    public OrderPageResponse getOrders(@PathVariable long eventId,
+    @GetMapping("{flashSaleEventId}/orders")
+    public OrderPageResponse getOrders(@PathVariable long flashSaleEventId,
                                        @RequestParam(defaultValue = "0") int page,
                                        @RequestParam(defaultValue = "20") int size) {
         if (page < 0 || size < 1 || size > 100) {
@@ -31,25 +27,33 @@ public class OrderController {
         return orders.getOrders(page, size);
     }
 
-    @GetMapping("{eventId}/orders/{orderId}")
-    public ResponseEntity<OrderResponse> getOrder(@PathVariable long eventId,
+    @GetMapping("{flashSaleEventId}/order/{orderId}")
+    public ResponseEntity<OrderResponse> getOrder(@PathVariable long flashSaleEventId,
                                                   @PathVariable long orderId) {
         var order = orders.getOrder(orderId);
         return ResponseEntity.of(order);
     }
 
-    @PostMapping("/{eventId}/product/{productId}")
-    public ResponseEntity<ReservationResponse> placeOrder(
-            @PathVariable long eventId,
-            @PathVariable long productId,
+    @PostMapping("/{flashSaleEventId}/product/{flashSaleProductId}")
+    public ResponseEntity<ErrorResponse> placeOrder(
+            @PathVariable long flashSaleEventId,
+            @PathVariable long flashSaleProductId,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestHeader("UserId") long userId) {
-        if (eventId <= 0 || productId <= 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "eventId and productId must be positive");
+        if (flashSaleEventId <= 0 || flashSaleProductId <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "flashSaleEventId and flashSaleProductId must be positive");
         }
 
-        var result = reservations.reserve(eventId, productId, userId, idempotencyKey);
-        return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK)
-                .body(new ReservationResponse(result.orderId()));
+        var result = orders.reserve(flashSaleEventId, flashSaleProductId, userId, idempotencyKey);
+        return switch (result) {
+            case RESERVED, REPLAY -> ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(new ErrorResponse("Inventory reserved in Redis, but order delivery is not implemented; no order was created"));
+            case INVALID_ARGUMENT -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid reservation request");
+            case CONFLICT -> throw new ResponseStatusException(HttpStatus.CONFLICT, "Idempotency key already used for another request");
+            case OUT_OF_STOCK -> throw new ResponseStatusException(HttpStatus.CONFLICT, "Product out of stock");
+            case EVENT_NOT_RUNNING -> throw new ResponseStatusException(HttpStatus.CONFLICT, "Event is not running");
+            case MISSING_PRODUCT -> throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Event product not found");
+            case MISSING_EVENT, INVALID_STATE -> throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Inventory unavailable");
+        };
     }
 }

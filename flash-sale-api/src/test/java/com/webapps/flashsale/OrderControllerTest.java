@@ -6,7 +6,6 @@ import com.webapps.flashsale.dto.OrderItemResponse;
 import com.webapps.flashsale.dto.OrderPageResponse;
 import com.webapps.flashsale.security.SecurityConfiguration;
 import com.webapps.flashsale.service.OrderService;
-import com.webapps.flashsale.service.ReservationService;
 import java.util.List;
 import java.util.Optional;
 import java.math.BigDecimal;
@@ -27,7 +26,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class OrderControllerTest {
     @Autowired private MockMvc mvc;
     @MockitoBean private OrderService orders;
-    @MockitoBean private ReservationService reservations;
 
     @Test
     void returnsOrdersWithoutAuthentication() throws Exception {

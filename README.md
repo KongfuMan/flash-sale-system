@@ -17,7 +17,7 @@ SPRING_PROFILES_ACTIVE=dev java -jar flash-sale-api/target/flash-sale-api-0.0.1-
 ```
 
 根 `pom.xml` 是 Maven reactor 父工程：`message-contract` 保存消息契约，
-`reservation-core` 保存共享预留业务，`flash-sale-api` 和 `order-consumer` 分别生成独立应用。
+`flash-sale-api` 和 `order-consumer` 分别生成独立应用；数据库订单预留由消费者负责。
 根目录运行 `mvn verify` 会构建并测试所有模块。
 
 ## 环境配置
@@ -206,7 +206,7 @@ curl http://localhost:8081/api/v1/orders/1
 
 ### 独立 Redis Cluster 库存原语（实验性）
 
-`InventoryPrimitives` 独立于订单和 `ReservationService`，不会在启动时自动预加载。
+`InventoryPrimitives` 用于 API 的实验性 Redis 准入，独立于消费者的数据库 `OrderService`，不会在启动时自动预加载。
 `reserve(eventId, eventProductId, userId, idempotencyKey)` 是独立 Java API：ID 为正的 64 位整数，键非空白且最多 128 个字符。
 同一活动内相同键和绑定重试返回 `REPLAY`，不同商品或用户返回 `CONFLICT`；即使活动已结束或库存为零也先检查重试。
 首次成功返回 `RESERVED`，在同一 hash 中以一次 `HSET` 同时扣减库存并写入 `idem:<sha256-hex-of-UTF8-key>` JSON
@@ -264,7 +264,7 @@ SPRING_PROFILES_ACTIVE=dev mvn -f flash-sale-api/pom.xml compile exec:java -Dexe
 
 根目录 `mvn package` 生成 `flash-sale-api/target/flash-sale-api-0.0.1-SNAPSHOT.jar` 和
 独立的 `order-consumer/target/order-consumer-0.0.1-SNAPSHOT.jar`。
-消费者不启动 HTTP 服务，也不扫描 API controller。它使用 `ReservationService` 创建订单，需要已初始化的
+消费者不启动 HTTP 服务，也不扫描 API controller。它使用 `OrderService` 创建订单，需要已初始化的
 PostgreSQL/Citus 业务数据库。示例（先创建 Kafka topic 并检查数据库配置）：
 
 ```bash
@@ -303,28 +303,27 @@ SPRING_PROFILES_ACTIVE=dev SPRING_KAFKA_BOOTSTRAP_SERVERS=localhost:9092 \
 不一致，且 Redis 预扣和 Kafka 发送之间没有可靠交接；解决这些问题并设计恢复、补偿和对账之前，
 不能把它们拼接成生产秒杀流程。
 
-`POST /api/v1/flash_sale_event/{eventId}/product/{eventProductId}` 接收 JSON：
+`POST /api/v1/flash_sale_event/{eventId}/product/{eventProductId}` 使用 `UserId` 和
+`Idempotency-Key` 请求头，调用 Redis 库存预留。**此流程仅供实验，不创建订单，也不发送 Kafka 消息。**
+Redis 返回 `RESERVED` 或 `REPLAY` 时接口返回 503，并说明投递尚未实现；Redis 中的库存预扣和标记仍然存在，
+没有自动回补或消息恢复。不要在生产或无法恢复库存的数据上使用。相同请求重试必须使用相同幂等键。
 
-```json
-{"userId": 1, "idempotencyKey": "unique-request-key"}
+```bash
+curl -X POST http://localhost:8081/api/v1/flash_sale_event/1/product/2 \
+  -H 'UserId: 3' -H 'Idempotency-Key: unique-request-key'
 ```
 
-事件 ID、活动商品 ID（`flash_sale_event_products.event_product_id`，不是 `product_id`）和用户 ID 必须为正整数，用户必须存在；幂等键不能为空白且最多 128 个字符。
-成功创建返回 `201` 和 `{"orderId": 123}`；相同幂等键和相同事件、活动商品、用户重试返回
-`200` 和原订单 ID。不同请求复用幂等键、事件未处于 `RUNNING`、活动商品不属于事件或库存不足返回
-`409`；输入无效返回 `400`。预留一个单位，订单状态为 `PENDING_PAYMENT`，30 分钟后过期。
-
-此接口使用 PostgreSQL SQL 和已有业务表及 `orders_idempotency_key_key` 唯一约束；默认 H2
-环境不支持此接口。它不执行迁移，也不创建订单项、支付或自动过期释放库存的任务，且**不执行每用户购买限制**。
-`userId` 由调用方提供，目前没有认证或授权，不能安全地用于生产。事件是否开放仅根据 `RUNNING`
-状态判断，不检查开始和结束时间。
+事件 ID、活动商品 ID（`event_product_id`，不是 `product_id`）和用户 ID 必须为正整数；幂等键不能为空白且最多
+128 个字符。冲突、无库存或活动未运行返回 409，商品缺失返回 404，输入无效返回 400，库存不可用返回 503。
+接口不校验用户是否存在，也不执行每用户购买限制；请求头没有身份认证或授权。Redis 超时的结果可能不明确，
+不能假定预扣未发生。独立 Kafka 消费者的数据库预订逻辑不受此 API 更改影响。
 
 ### Redis Reservation Admission
 
 **Current implementation warning:** The Redis admission and provisioning workflow described
-below is not implemented in the current source tree. `ReservationService` currently writes
-directly to PostgreSQL, regardless of `inventory.cache.enabled`; Redis failures do not
-produce the fail-closed behavior described below. Do not use the instructions below to
+below is not implemented in the current source tree. The API now calls the separate experimental
+Redis primitive but does not publish to Kafka or create orders; the consumer's `OrderService`
+still writes directly to PostgreSQL. Do not use the instructions below to
 provision or reconcile Redis, or rely on them for inventory safety. There is no bootstrap
 command for that design or Kafka handoff. The existing PostgreSQL conditional update and idempotency
 constraint remain in place. The separate experimental primitives above have a manual prefill
@@ -428,9 +427,8 @@ before it can exercise the reservation endpoint.
 
 1. 根 `pom.xml`：reactor 模块；各模块的 `pom.xml` 定义各自依赖。
 2. `flash-sale-api/src/main/java/`：API 应用入口、controller 和配置。
-3. `reservation-core/src/main/java/`：共享预留业务及数据库访问。
-4. `message-contract/src/main/java/`：消息契约。
-5. `order-consumer/src/main/java/`：独立消费者入口和消息处理。
+3. `message-contract/src/main/java/`：消息契约。
+4. `order-consumer/src/main/java/`：独立消费者、消息处理和数据库预留服务。
 
 `@RestController` 的返回值会由 Spring MVC 序列化为 JSON；内嵌的
 Tomcat 负责接收 HTTP 请求。服务默认监听 8081 端口。

@@ -5,25 +5,43 @@ import com.webapps.flashsale.dto.OrderItemResponse;
 import com.webapps.flashsale.dto.OrderPageResponse;
 import com.webapps.flashsale.entity.OrderItemEntity;
 import com.webapps.flashsale.entity.OrderEntity;
+import com.webapps.flashsale.inventory.InventoryPrimitives;
+import com.webapps.flashsale.inventory.InventoryReservationResult;
 import com.webapps.flashsale.repository.OrderItemRepository;
 import com.webapps.flashsale.repository.OrderRepository;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class OrderService {
     private final OrderRepository orders;
     private final OrderItemRepository items;
+    private final InventoryPrimitives inventory;
 
-    public OrderService(OrderRepository orders, OrderItemRepository items) {
+    public OrderService(OrderRepository orders, OrderItemRepository items, InventoryPrimitives inventory) {
         this.orders = orders;
         this.items = items;
+        this.inventory = inventory;
+    }
+
+    public InventoryReservationResult reserve(long eventId, long eventProductId, long userId, String idempotencyKey) {
+        InventoryReservationResult result;
+        try {
+            result = inventory.reserve(eventId, eventProductId, userId, idempotencyKey);
+        } catch (DataAccessException ex) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Inventory unavailable", ex);
+        }
+        // TODO: Reliably publish admitted requests to Kafka, including recovery of pending markers.
+        return result;
     }
 
     @Transactional(readOnly = true)

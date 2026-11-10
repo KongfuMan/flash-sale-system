@@ -15,7 +15,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
-/** Independent primitives, not connected to order processing. */
+/** Experimental Redis inventory primitives; not connected to database order processing. */
 @Service
 public class InventoryPrimitives {
     static final int MAX_PRODUCTS = 1000;
