@@ -1,6 +1,6 @@
 package com.webapps.flashsale.inventory;
 
-import com.webapps.flashsale.controller.InventoryOperatorController;
+import com.webapps.flashsale.controller.OperationController;
 import com.webapps.flashsale.security.SecurityConfiguration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,7 +13,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@WebMvcTest(InventoryOperatorController.class)
+@WebMvcTest(OperationController.class)
 @Import(SecurityConfiguration.class)
 class InventoryOperatorControllerTest {
     @Autowired private MockMvc mvc;

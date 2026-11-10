@@ -40,7 +40,9 @@ public class OrderService {
         } catch (DataAccessException ex) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Inventory unavailable", ex);
         }
+
         // TODO: Reliably publish admitted requests to Kafka, including recovery of pending markers.
+
         return result;
     }
 

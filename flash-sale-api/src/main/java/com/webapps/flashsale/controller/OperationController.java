@@ -10,15 +10,15 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 @RestController
-@RequestMapping("/api/v1/operator/events")
-public class InventoryOperatorController {
+@RequestMapping("/api/v1/operation/flash_sale_event")
+public class OperationController {
     private final InventoryPrimitives inventory;
 
-    public InventoryOperatorController(InventoryPrimitives inventory) {
+    public OperationController(InventoryPrimitives inventory) {
         this.inventory = inventory;
     }
 
-    @PostMapping("/{eventId}/inventory/prefill")
+    @PostMapping("/{eventId}")
     public ResponseEntity<Void> prefill(@PathVariable long eventId) {
         try {
             if (!inventory.prefill(eventId)) {
