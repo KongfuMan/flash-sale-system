@@ -21,9 +21,10 @@ build:
   artifacts:
     expire_in: 1 day
     paths:
-      - target/flashsale-*.jar
+      - flash-sale-api/target/flash-sale-api-0.0.1-SNAPSHOT.jar
+      - order-consumer/target/order-consumer-0.0.1-SNAPSHOT.jar
     reports:
-      junit: target/surefire-reports/TEST-*.xml
+      junit: "*/target/surefire-reports/TEST-*.xml"
 
 migrate_production:
   stage: migrate
@@ -40,7 +41,8 @@ migrate_production:
     - ': "${FLYWAY_URL:?Set the production JDBC URL}"'
     - ': "${FLYWAY_USER:?Set the migration database user}"'
     - ': "${FLYWAY_PASSWORD:?Set the migration database password}"'
-    - mvn --batch-mode --no-transfer-progress org.flywaydb:flyway-maven-plugin:11.7.2:migrate
+    - mvn --batch-mode --no-transfer-progress -pl flash-sale-api -am -DskipTests install
+    - mvn --batch-mode --no-transfer-progress -f flash-sale-api/pom.xml org.flywaydb:flyway-maven-plugin:11.7.2:migrate "-Dflyway.locations=filesystem:${CI_PROJECT_DIR}/flash-sale-api/src/main/resources/db/migration"
 
 publish_production_artifact:
   stage: publish
@@ -53,9 +55,11 @@ publish_production_artifact:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_REF_PROTECTED == "true"'
     - when: never
   script:
-    - test -f target/flashsale-0.0.1-SNAPSHOT.jar
+    - test -f flash-sale-api/target/flash-sale-api-0.0.1-SNAPSHOT.jar
+    - test -f order-consumer/target/order-consumer-0.0.1-SNAPSHOT.jar
   artifacts:
     name: "flashsale-$CI_COMMIT_SHA"
     expire_in: 30 days
     paths:
-      - target/flashsale-0.0.1-SNAPSHOT.jar
+      - flash-sale-api/target/flash-sale-api-0.0.1-SNAPSHOT.jar
+      - order-consumer/target/order-consumer-0.0.1-SNAPSHOT.jar
