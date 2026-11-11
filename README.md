@@ -214,10 +214,10 @@ curl http://localhost:8081/api/v1/orders/1
 `PENDING` 状态和消息载荷；ID 存为字符串。原始键是敏感数据，必须限制 Redis 读取和日志访问。
 记录无 TTL、不自动删除，空间会持续增长；未知或损坏记录失败关闭。脚本不再读取旧 `i:` 标记；切换前必须停止所有
 写入并等待在途操作结束，安全迁移和核对旧标记后才能使用 `idem:`。旧版写入方也不能与新版混合运行。
-不同活动允许使用相同键，但 PostgreSQL 的
-`orders_idempotency_key_key` 是全局唯一约束，这两种语义不兼容；在设计并解决此冲突之前禁止接入 Kafka 或订单处理。
+不同活动允许使用相同键；Kafka 消息 ID 由活动 ID 和幂等键确定，消费者使用 `kafka:<messageId>` 作为全局数据库
+幂等键。其他数据库写入方不得使用该命名空间；此设计仍需配合跨系统对账验证。
 
-这些记录只是 Redis hash 字段，不是 Redis Stream；没有 relay 或 Kafka 发布，也没有连接到下述独立消费者。Redis 与数据库不构成
+这些记录只是 Redis hash 字段，不是 Redis Stream；API 在首次预扣后直接发布 Kafka，没有 relay。Redis 与数据库不构成
 事务，持久化、复制、故障转移、淘汰、外部修改、容量和恢复均需运维设计，Redis 确认写入仍可能丢失或回滚。
 当前方案不可用于生产或当作实际订单库存保护，也不保证消息最终送达。
 
@@ -253,7 +253,7 @@ SPRING_PROFILES_ACTIVE=dev mvn -f flash-sale-api/pom.xml compile exec:java -Dexe
 激活先读取数据库并要求状态为 `RUNNING`，再通过 Lua 仅将已存在 hash 的 `UPCOMING` 或 `RUNNING` 状态
 设为 `RUNNING`，不会创建 key 或重置库存；其他状态、缺失 key、错误类型均失败。数据库读取与 Redis 更新
 不具备原子性，必须保持写入静止并核对结果后才能恢复；数据库状态后续变化不会自动同步。清理或重建也必须
-先停止写入并人工协调两个存储，不能在流量运行时重置。此原语仍非生产方案，Kafka 尚未接入。
+先停止写入并人工协调两个存储，不能在流量运行时重置。此原语和直接 Kafka 发布仍非生产方案。
 
 单元测试：`mvn test -Dtest=InventoryPrimitivesTest -Dsurefire.failIfNoSpecifiedTests=false`。可选集群脚本测试仅在显式指定集群时运行，
 使用随机活动 ID，只删除自己成功创建的 key，不访问数据库：
@@ -299,14 +299,16 @@ SPRING_PROFILES_ACTIVE=dev SPRING_KAFKA_BOOTSTRAP_SERVERS=localhost:9092 \
 会阻塞相应分区及同一 consumer 线程上的其他分区，必须监控并人工处理；目前没有死信队列、结果通知或
 自动库存补偿。须保证 Kafka 的消息保留时间足够，并在处理前验证目标 topic。
 
-此消费者不包含生产者，也没有与 Redis 库存原语接通。特别是 Redis 活动内幂等范围与数据库全局约束
-不一致，且 Redis 预扣和 Kafka 发送之间没有可靠交接；解决这些问题并设计恢复、补偿和对账之前，
-不能把它们拼接成生产秒杀流程。
+API 仅在 Redis 返回 `RESERVED` 时直接向此消费者的 Kafka topic 发布。Redis 预扣和 Kafka 发布不具备原子性，
+没有可靠交接、恢复、补偿或对账；不能将此流程用于生产秒杀。
 
 `POST /api/v1/flash_sale_event/{eventId}/product/{eventProductId}` 使用 `UserId` 和
-`Idempotency-Key` 请求头，调用 Redis 库存预留。**此流程仅供实验，不创建订单，也不发送 Kafka 消息。**
-Redis 返回 `RESERVED` 或 `REPLAY` 时接口返回 503，并说明投递尚未实现；Redis 中的库存预扣和标记仍然存在，
-没有自动回补或消息恢复。不要在生产或无法恢复库存的数据上使用。相同请求重试必须使用相同幂等键。
+`Idempotency-Key` 请求头，调用 Redis 库存预留。首次预扣后直接发送 Kafka，broker 确认后返回 202
+`{"status":"PENDING"}`，不代表订单已创建。仅有 `RESERVED` 会发送，`REPLAY` 不发送并返回 503，
+因为系统没有记录原请求是否发布成功。Kafka 失败或等待超时返回 503，但预扣和标记仍可能存在。
+进程在预扣后、发送前崩溃会丢失发布，重试也不会补发；超时也可能已发布，不能盲目回补库存。
+没有自动恢复或补偿，必须人工对账；此流程仅供实验，不要在生产或无法恢复库存的数据上使用。
+API 和消费者需配置相同 `reservation.kafka.topic`（默认 `order-requests-v1`）及可访问的 Kafka broker。
 
 ```bash
 curl -X POST http://localhost:8081/api/v1/flash_sale_event/1/product/2 \
@@ -321,11 +323,11 @@ curl -X POST http://localhost:8081/api/v1/flash_sale_event/1/product/2 \
 ### Redis Reservation Admission
 
 **Current implementation warning:** The Redis admission and provisioning workflow described
-below is not implemented in the current source tree. The API now calls the separate experimental
-Redis primitive but does not publish to Kafka or create orders; the consumer's `OrderService`
+below is not implemented in the current source tree. The API calls the experimental Redis primitive
+and directly publishes new reservations to Kafka without a recoverable relay; the consumer's `OrderService`
 still writes directly to PostgreSQL. Do not use the instructions below to
 provision or reconcile Redis, or rely on them for inventory safety. There is no bootstrap
-command for that design or Kafka handoff. The existing PostgreSQL conditional update and idempotency
+command for that design or reliable Kafka handoff. The existing PostgreSQL conditional update and idempotency
 constraint remain in place. The separate experimental primitives above have a manual prefill
 command, but do not implement the admission design below.
 

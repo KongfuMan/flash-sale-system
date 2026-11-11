@@ -18,14 +18,14 @@ class ReservationControllerTest {
             .setControllerAdvice(new GlobalExceptionHandler()).build();
 
     @Test
-    void reportsIncompleteDeliveryForReservedAndReplay() throws Exception {
+    void acceptsPublishedReservationButCannotConfirmReplay() throws Exception {
         when(reservations.reserve(1, 2, 3, "key"))
                 .thenReturn(InventoryReservationResult.RESERVED, InventoryReservationResult.REPLAY);
         var request = post("/api/v1/flash_sale_event/1/product/2")
                 .header("UserId", 3).header("Idempotency-Key", "key");
+        mvc.perform(request).andExpect(status().isAccepted()).andExpect(jsonPath("$.status").value("PENDING"));
         mvc.perform(request).andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.message").value("Inventory reserved in Redis, but order delivery is not implemented; no order was created"));
-        mvc.perform(request).andExpect(status().isServiceUnavailable());
+                .andExpect(jsonPath("$.message").value("Reservation already exists; Kafka delivery cannot be confirmed"));
         verify(reservations, times(2)).reserve(1, 2, 3, "key");
     }
 

@@ -4,6 +4,7 @@ import com.webapps.flashsale.dto.OrderPageResponse;
 import com.webapps.flashsale.dto.OrderResponse;
 import com.webapps.flashsale.dto.ErrorResponse;
 import com.webapps.flashsale.service.OrderService;
+import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -35,7 +36,7 @@ public class OrderController {
     }
 
     @PostMapping("/{flashSaleEventId}/product/{flashSaleProductId}")
-    public ResponseEntity<ErrorResponse> placeOrder(
+    public ResponseEntity<?> placeOrder(
             @PathVariable long flashSaleEventId,
             @PathVariable long flashSaleProductId,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
@@ -46,8 +47,9 @@ public class OrderController {
 
         var result = orders.reserve(flashSaleEventId, flashSaleProductId, userId, idempotencyKey);
         return switch (result) {
-            case RESERVED, REPLAY -> ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .body(new ErrorResponse("Inventory reserved in Redis, but order delivery is not implemented; no order was created"));
+            case RESERVED -> ResponseEntity.accepted().body(Map.of("status", "PENDING"));
+            case REPLAY -> ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(new ErrorResponse("Reservation already exists; Kafka delivery cannot be confirmed"));
             case INVALID_ARGUMENT -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid reservation request");
             case CONFLICT -> throw new ResponseStatusException(HttpStatus.CONFLICT, "Idempotency key already used for another request");
             case OUT_OF_STOCK -> throw new ResponseStatusException(HttpStatus.CONFLICT, "Product out of stock");

@@ -1,5 +1,10 @@
 package com.webapps.flashsale.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.webapps.flashsale.contract.MessageEnvelope;
+import com.webapps.flashsale.contract.MessageType;
+import com.webapps.flashsale.contract.OrderRequested;
 import com.webapps.flashsale.dto.OrderResponse;
 import com.webapps.flashsale.dto.OrderItemResponse;
 import com.webapps.flashsale.dto.OrderPageResponse;
@@ -13,10 +18,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
+import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -26,22 +40,43 @@ public class OrderService {
     private final OrderRepository orders;
     private final OrderItemRepository items;
     private final InventoryPrimitives inventory;
+    private final KafkaTemplate<String, String> kafka;
+    private final ObjectMapper mapper;
+    private final String topic;
 
-    public OrderService(OrderRepository orders, OrderItemRepository items, InventoryPrimitives inventory) {
+    public OrderService(OrderRepository orders, OrderItemRepository items, InventoryPrimitives inventory,
+                        KafkaTemplate<String, String> kafka, ObjectMapper mapper,
+                        @Value("${reservation.kafka.topic:order-requests-v1}") String topic) {
         this.orders = orders;
         this.items = items;
         this.inventory = inventory;
+        this.kafka = kafka;
+        this.mapper = mapper;
+        this.topic = topic;
     }
 
-    public InventoryReservationResult reserve(long eventId, long eventProductId, long userId, String idempotencyKey) {
+    public InventoryReservationResult reserve(long flashSaleEventId, long eventProductId, long userId, String idempotencyKey) {
         InventoryReservationResult result;
         try {
-            result = inventory.reserve(eventId, eventProductId, userId, idempotencyKey);
+            result = inventory.reserve(flashSaleEventId, eventProductId, userId, idempotencyKey);
         } catch (DataAccessException ex) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Inventory unavailable", ex);
         }
 
-        // TODO: Reliably publish admitted requests to Kafka, including recovery of pending markers.
+        if (result == InventoryReservationResult.RESERVED) {
+            var messageId = UUID.nameUUIDFromBytes((flashSaleEventId + ":" + idempotencyKey).getBytes(StandardCharsets.UTF_8));
+            var message = new MessageEnvelope<>(messageId, MessageType.ORDER_REQUESTED, 2,
+                    OffsetDateTime.now(ZoneOffset.UTC),
+                    new OrderRequested(flashSaleEventId, userId, List.of(new OrderRequested.Item(eventProductId, 1))));
+            try {
+                kafka.send(topic, messageId.toString(), mapper.writeValueAsString(message)).get(5, TimeUnit.SECONDS);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Order publication uncertain", ex);
+            } catch (JsonProcessingException | ExecutionException | TimeoutException | RuntimeException ex) {
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Order publication uncertain", ex);
+            }
+        }
 
         return result;
     }

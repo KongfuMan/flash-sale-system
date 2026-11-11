@@ -23,7 +23,8 @@ import static org.mockito.Mockito.when;
 class OrderServiceTest {
     private final OrderRepository orders = mock(OrderRepository.class);
     private final OrderItemRepository items = mock(OrderItemRepository.class);
-    private final OrderService service = new OrderService(orders, items, mock(InventoryPrimitives.class));
+    private final OrderService service = new OrderService(orders, items, mock(InventoryPrimitives.class),
+            mock(org.springframework.kafka.core.KafkaTemplate.class), new com.fasterxml.jackson.databind.ObjectMapper(), "topic");
 
     @Test
     void groupsItemsInOneQueryAndKeepsOrdersWithoutItems() {
