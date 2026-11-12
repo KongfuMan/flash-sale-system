@@ -3,24 +3,26 @@
 --   status              -> event status string, e.g. "RUNNING".
 --   prod:<eventProductId> -> available stock string, e.g. prod:456 -> "100".
 --   idem:<idempotencyKey> -> JSON string for an accepted idempotency key:
---     {version: 2, status: "PENDING", idempotencyKey: <raw key>,
+--     {version: 3, status: "PENDING", idempotencyKey: <raw key>,
 --      requestId: <SHA-256 of eventId + ":" + raw key>,
 --      eventId: <string>, eventProductId: <string>, userId: <string>}
--- cjson.encode converts this record to the JSON string stored in the hash.
+-- Java serializes InventoryMarker and passes the JSON string to the script.
 -- On retry, Lua decodes it to verify the key and request binding before
--- returning REPLAY or CONFLICT without decrementing stock again. PENDING does not
--- publish a message or create an order. Version 1 markers are also accepted after
--- checking their redundant binding and message fields. Markers have no per-field TTL.
--- ARGV: eventId, eventProductId, userId, idempotencyKey, requestId.
+-- returning REPLAY, LEGACY_REPLAY, or CONFLICT without decrementing stock again.
+-- Versions 1 and 2 predate the outbox and require manual reconciliation on replay.
+-- Version 1 also requires consistent redundant binding and message fields.
+-- Markers have no per-field TTL.
+-- outbox:<requestId> contains the full serialized Kafka envelope.
+-- ARGV: eventId, eventProductId, userId, idempotencyKey, requestId, marker JSON, envelope JSON.
 local keyType = redis.call('TYPE', KEYS[1]).ok
 if keyType == 'none' then return 'MISSING_EVENT' end
 if keyType ~= 'hash' then return 'INVALID_STATE' end
 
-local eventId, productId, userId, idempotencyKey, requestId = unpack(ARGV)
+local eventId, productId, userId, idempotencyKey, requestId, encoded, payload = unpack(ARGV)
 local marker = redis.call('HGET', KEYS[1], 'idem:' .. idempotencyKey)
 if marker then
     local ok, record = pcall(cjson.decode, marker)
-    if not ok or type(record) ~= 'table' or (record.version ~= 1 and record.version ~= 2)
+    if not ok or type(record) ~= 'table' or (record.version ~= 1 and record.version ~= 2 and record.version ~= 3)
         or record.status ~= 'PENDING'
         or type(record.eventProductId) ~= 'string' or type(record.userId) ~= 'string'
         or record.eventId ~= eventId
@@ -31,8 +33,10 @@ if marker then
         or record.message.eventProductId ~= record.eventProductId or record.message.userId ~= record.userId
         or record.message.requestId ~= record.requestId) then return 'INVALID_STATE' end
     if record.eventProductId ~= productId or record.userId ~= userId then return 'CONFLICT' end
+    if record.version ~= 3 then return 'LEGACY_REPLAY' end
     return 'REPLAY'
 end
+if redis.call('HEXISTS', KEYS[1], 'outbox:' .. requestId) == 1 then return 'INVALID_STATE' end
 
 local status = redis.call('HGET', KEYS[1], 'status')
 if status ~= 'RUNNING' and status ~= 'UPCOMING' and status ~= 'ENDED' and status ~= 'CANCELED' then return 'INVALID_STATE' end
@@ -45,12 +49,14 @@ local n = tonumber(stock)
 if n > 2147483647 then return 'INVALID_STATE' end
 if n == 0 then return 'OUT_OF_STOCK' end
 
-local record = {
-    version = 2, status = 'PENDING', idempotencyKey = idempotencyKey, requestId = requestId,
-    eventId = eventId, eventProductId = productId, userId = userId
-}
-local ok, encoded = pcall(cjson.encode, record)
-if not ok then return 'INVALID_STATE' end
+local ok, record = pcall(cjson.decode, encoded)
+if not ok or type(record) ~= 'table' or record.version ~= 3 or record.status ~= 'PENDING'
+    or record.idempotencyKey ~= idempotencyKey or record.requestId ~= requestId
+    or record.eventId ~= eventId or record.eventProductId ~= productId or record.userId ~= userId then
+    return 'INVALID_STATE'
+end
+if not payload or payload == '' then return 'INVALID_STATE' end
 -- Redis scripts do not roll back on error: the only mutation must be one command.
-redis.call('HSET', KEYS[1], 'prod:' .. productId, tostring(n - 1), 'idem:' .. idempotencyKey, encoded)
+redis.call('HSET', KEYS[1], 'prod:' .. productId, tostring(n - 1), 'idem:' .. idempotencyKey, encoded,
+    'outbox:' .. requestId, payload)
 return 'RESERVED'

@@ -207,21 +207,21 @@ curl http://localhost:8081/api/v1/orders/1
 ### 独立 Redis Cluster 库存原语（实验性）
 
 `InventoryPrimitives` 用于 API 的实验性 Redis 准入，独立于消费者的数据库 `OrderService`，不会在启动时自动预加载。
-`reserve(eventId, eventProductId, userId, idempotencyKey)` 是独立 Java API：ID 为正的 64 位整数，键非空白且最多 128 个字符。
-同一活动内相同键和绑定重试返回 `REPLAY`，不同商品或用户返回 `CONFLICT`；即使活动已结束或库存为零也先检查重试。
-首次成功返回 `RESERVED`，在同一 hash 中以一次 `HSET` 同时扣减库存并写入 `idem:<idempotencyKey>` JSON
-待处理记录。版本 2 记录包含活动、商品和用户 ID、原始幂等键、确定性 requestId（SHA-256，输入为活动 ID、冒号和原始键的 UTF-8）
-及 `PENDING` 状态；ID 存为字符串，不再重复存储 `binding` 和 `message` 对象。版本 1 记录仍按原格式验证。
+`reserve(eventId, eventProductId, userId, idempotencyKey, payload)` 是独立 Java API：ID 为正的 64 位整数，键非空白且最多 128 个字符。
+同一活动内相同键和绑定的版本 3 标记重试返回 `REPLAY`，版本 1/2 标记返回 `LEGACY_REPLAY`，不同商品或用户返回 `CONFLICT`；即使活动已结束或库存为零也先检查重试。
+首次成功返回 `RESERVED`，在同一 hash 中以一次 `HSET` 同时扣减库存并写入 `outbox:<requestId>` 信封及 `idem:<idempotencyKey>` JSON
+待处理记录。版本 3 记录包含活动、商品和用户 ID、原始幂等键、确定性 requestId（SHA-256，输入为活动 ID、冒号和原始键的 UTF-8）
+及 `PENDING` 状态；ID 存为字符串，不重复存储 `binding` 和 `message` 对象。版本 1 和 2 记录仍按各自格式验证，但无法确认历史投递，匹配重试需要人工对账。
 原始键是敏感数据，必须限制 Redis 读取和日志访问。
-记录无 TTL、不自动删除，空间会持续增长；未知或损坏记录失败关闭。脚本不读取旧 `i:` 或
+版本 3 的结构由 Java `InventoryMarker` record 定义并序列化；Lua 在写入前校验记录与请求一致，重试时校验已存记录。
+版本 1 兼容格式仍由 Lua 校验。Java 与 Lua 的字段约定通过 Redis 集群契约测试验证，并非编译时强制保证。
+幂等记录无 TTL、不自动删除，空间会持续增长；outbox 在 Kafka ACK 后条件删除。未知或损坏的幂等记录失败关闭。脚本不读取旧 `i:` 或
 `idem:<sha256>` 标记；切换前必须停止所有写入并等待在途操作结束，安全迁移和核对旧标记后才能恢复。
-版本 1 写入方无法读取版本 2 记录；升级前必须停止所有旧版写入方并等待在途操作结束，不能混合运行或直接回滚。
-不同活动允许使用相同键；Kafka 消息 ID 由活动 ID 和幂等键确定，消费者使用 `kafka:<messageId>` 作为全局数据库
-幂等键。其他数据库写入方不得使用该命名空间；此设计仍需配合跨系统对账验证。
+旧版写入方无法读取版本 3 记录；升级前必须停止所有旧版写入方并等待在途操作结束，不能混合运行或直接回滚。
+不同活动允许使用相同键；Kafka 消息 UUID 由活动 ID 和幂等键确定，消费者使用不带前缀的 UUID 字符串作为全局数据库
+幂等键。其他数据库写入方必须避免使用相同键；此设计仍需配合跨系统对账验证。
 
-这些记录只是 Redis hash 字段，不是 Redis Stream；API 在首次预扣后直接发布 Kafka，没有 relay。Redis 与数据库不构成
-事务，持久化、复制、故障转移、淘汰、外部修改、容量和恢复均需运维设计，Redis 确认写入仍可能丢失或回滚。
-当前方案不可用于生产或当作实际订单库存保护，也不保证消息最终送达。
+这些记录只是 Redis hash 字段，不是 Redis Stream。API 写入 outbox，由启用的 API 定时任务发布；当前方案不可用于生产或当作实际订单库存保护，也不保证消息最终送达。
 
 预加载前必须停止所有涉及该活动的数据库和 Redis 库存写入，等待在途操作完成并核对数据，整个读取和
 预加载期间保持静止；数据库读取与 Redis 写入并非原子操作。使用具有数据库只读权限及受限 Redis 权限的
@@ -255,12 +255,18 @@ SPRING_PROFILES_ACTIVE=dev mvn -f flash-sale-api/pom.xml compile exec:java -Dexe
 激活先读取数据库并要求状态为 `RUNNING`，再通过 Lua 仅将已存在 hash 的 `UPCOMING` 或 `RUNNING` 状态
 设为 `RUNNING`，不会创建 key 或重置库存；其他状态、缺失 key、错误类型均失败。数据库读取与 Redis 更新
 不具备原子性，必须保持写入静止并核对结果后才能恢复；数据库状态后续变化不会自动同步。清理或重建也必须
-先停止写入并人工协调两个存储，不能在流量运行时重置。此原语和直接 Kafka 发布仍非生产方案。
+先停止写入并人工协调两个存储，不能在流量运行时重置。此原语仍非生产方案。
 
 单元测试：`mvn test -Dtest=InventoryPrimitivesTest -Dsurefire.failIfNoSpecifiedTests=false`。可选集群脚本测试仅在显式指定集群时运行，
 使用随机活动 ID，只删除自己成功创建的 key，不访问数据库：
 `mvn test -Dtest=InventoryClusterTest -Dsurefire.failIfNoSpecifiedTests=false -Dinventory.test.cluster.nodes=host1:7001,host2:7002,host3:7003`。
 使用隔离测试集群和受限凭据；测试可能因异常终止而留下随机 key。
+CI 必须对隔离 Redis Cluster 运行以下记录契约测试；`inventory.test.cluster.required=true` 防止未配置集群时静默跳过。
+测试检查 Java 序列化的版本 3 记录、Lua 的写入和重试行为以及旧版标记的处理；单独的 record 单元测试不需要 Redis：
+
+```bash
+mvn -pl flash-sale-api -am test -Dtest=InventoryMarkerTest,InventoryMarkerPrefixTest -Dsurefire.failIfNoSpecifiedTests=false -Dinventory.test.cluster.required=true -Dinventory.test.cluster.nodes=host1:7001,host2:7002,host3:7003
+```
 
 ### 独立 Kafka 订单消费者
 
@@ -293,7 +299,7 @@ SPRING_PROFILES_ACTIVE=dev SPRING_KAFKA_BOOTSTRAP_SERVERS=localhost:9092 \
 `OrderRequested` 使用 `items` 列表，每项包含 `event_product_id` 和 `quantity`；该模型本身不执行业务验证。
 消费者目前仅接受一个商品且数量为 1。多商品的原子预留、库存、支付和幂等处理尚未实现；
 多个商品或其他数量会被拒绝并持续重试，可能阻塞分区。版本 1 消息也会被拒绝；部署前须处理旧 topic 中的消息。
-数据库生成订单 ID，并使用 `kafka:<message_id>` 作为全局幂等键；其他写入方不得占用 `kafka:` 命名空间。
+数据库生成订单 ID，并使用不带 `kafka:` 前缀的 `message_id` UUID 字符串作为全局幂等键；其他写入方必须避免键冲突。
 订单事务提交后才确认 Kafka offset，重复投递通过现有数据库幂等约束处理。
 新 topic 和字段不兼容旧的 `order-created-events-v1` 消息；切换前需创建新 topic 并安排旧消息的处理，
 不可直接重投旧消息或假定旧 offset 会迁移。
@@ -301,16 +307,65 @@ SPRING_PROFILES_ACTIVE=dev SPRING_KAFKA_BOOTSTRAP_SERVERS=localhost:9092 \
 会阻塞相应分区及同一 consumer 线程上的其他分区，必须监控并人工处理；目前没有死信队列、结果通知或
 自动库存补偿。须保证 Kafka 的消息保留时间足够，并在处理前验证目标 topic。
 
-API 仅在 Redis 返回 `RESERVED` 时直接向此消费者的 Kafka topic 发布。Redis 预扣和 Kafka 发布不具备原子性，
-没有可靠交接、恢复、补偿或对账；不能将此流程用于生产秒杀。
-
 `POST /api/v1/flash_sale_event/{eventId}/product/{eventProductId}` 使用 `UserId` 和
-`Idempotency-Key` 请求头，调用 Redis 库存预留。首次预扣后直接发送 Kafka，broker 确认后返回 202
-`{"status":"PENDING"}`，不代表订单已创建。仅有 `RESERVED` 会发送，`REPLAY` 不发送并返回 503，
-因为系统没有记录原请求是否发布成功。Kafka 失败或等待超时返回 503，但预扣和标记仍可能存在。
-进程在预扣后、发送前崩溃会丢失发布，重试也不会补发；超时也可能已发布，不能盲目回补库存。
-没有自动恢复或补偿，必须人工对账；此流程仅供实验，不要在生产或无法恢复库存的数据上使用。
-API 和消费者需配置相同 `reservation.kafka.topic`（默认 `order-requests-v1`）及可访问的 Kafka broker。
+`Idempotency-Key` 请求头，调用 Redis 库存预留。首次预扣及版本 3 标记的匹配重试返回 202
+`{"status":"PENDING"}`，不代表订单已创建或消息已发布。版本 1/2 标记的匹配重试返回 503，必须人工对账，不能推断历史投递结果。Redis 超时的结果可能不明确，不能盲目回补库存。
+此流程仅供实验，不要在生产或无法恢复库存的数据上使用。
+
+### Redis Outbox 与 API 定时 Relay
+
+API 写入 outbox，不直接发送 Kafka；relay 作为 `flash-sale-api` 内的 `@Scheduled` 任务运行，不再单独构建或部署。
+定时任务默认关闭；如未启用，新的 outbox 消息会一直保留在 Redis 中，不会自动发布。
+
+每次新的成功预扣在同一活动 hash 内，以单个 `HSET` 同时写入递减后的 `prod:<eventProductId>`、
+持久的 `idem:<idempotencyKey>` 标记和 `outbox:<requestId>`。outbox 的 value 是完整的 Kafka 消息信封，
+而不是仅有标记或指针；`requestId` 由活动 ID 和原始幂等键确定。匹配的版本 3 重试返回已接受，
+不再次扣库存或创建新消息；接受只表示准入，不表示 Kafka 已投递或订单已创建。绑定不匹配返回冲突。
+标记保留以支持幂等，即使已确认的 outbox 字段被删除；不要把原始键或信封暴露给不受信任的客户端。
+
+定时 relay 扫描 Redis Cluster 当前可用 master 上的活动 hash，校验 outbox 信封并发布
+到消费者使用的 Kafka topic，以消息 UUID 为 Kafka key。收到 broker 确认后，以原子比较删除方式删除仍与已发送 value 完全相同的
+outbox 字段；发送失败、超时或确认结果不明时保留以便重试。
+
+这只能在 Redis 已确认数据不会丢失或回滚的前提下提供至少一次交付，不是 Redis 与 Kafka 的分布式事务，
+也不是恰好一次。broker 确认后、删除前崩溃，超时但实际发送成功，多个启用 relay 的 API 实例并发或扫描重复均可能产生重复；
+消费者必须用稳定的消息 ID 和数据库唯一约束幂等处理。Kafka 的确认和持久化配置、消费者事务、消息保留时间
+以及 Redis 持久化、复制和故障转移策略都需要独立验证；Redis ACK 本身不保证故障后数据仍存在。Redis 丢失
+或回滚、淘汰、过期、容量耗尽或外部修改会破坏库存、幂等或交付，必须停止准入并人工核对，不能承诺自动恢复。
+
+集群扫描不是快照：SCAN 可重复或遗漏，故障转移、节点不可达和 resharding 可使一次遍历错过字段；需要持续
+扫描所有当前 master、刷新拓扑并在拓扑稳定后重复扫描，不能以单次空扫描证明队列已清空。扫描成本、大活动
+hash、积压、损坏信封、Kafka 不可用及永久消费失败都需监控和人工处理；relay 没有指标或 metrics 端点，仅记录警告日志，也没有租约、重试上限、死信队列、
+告警、清理或对账工具。限制 Redis 权限、禁止驱逐和不受控写入，规划内存、备份与恢复，持续观察积压和投递延迟。
+
+迁移时先停止所有 API 实例以及新旧库存写入方，等待在途操作结束并核对 Redis、Kafka 和数据库。历史
+`idem:` 标记没有可靠的完整 outbox 信封，不会自动重放，也不能据标记推断是否曾发布或创建订单；逐条人工
+对账并处理不确定结果，禁止盲目补发或回补库存。保留已验证的幂等状态，协调旧字段格式和库存迁移，完成核验后
+才启用新写入方和 relay；不要混合运行旧的直接发布写入方或直接回滚。现有 prefill 对已存在的 key 一律拒绝，
+不能用它覆盖已有 hash 或作为迁移、重建方案；任何人工重建都需在静止期间备份、核对并明确处理未完成请求。
+
+任务使用 API 的 Redis Cluster 连接配置和 Kafka producer 配置，topic 应与消费者一致。启用前必须配置 Redis Cluster
+和 Kafka，并确认 broker 的副本数、`min.insync.replicas` 和持久化策略。启用 relay 时会检查 producer 使用
+`acks=all`、幂等发送和字符串序列化器，否则启动失败。
+
+| 环境变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `RELAY_ENABLED` | `false` | 显式启用定时任务 |
+| `RELAY_POLL_MS` | `1000` | 每次扫描完成后的等待时间，毫秒 |
+| `RELAY_TIMEOUT_MS` | `5000` | 等待 Kafka ACK 的超时时间，毫秒 |
+| `RELAY_TOPIC` | `order-requests-v1` | Kafka 发布 topic |
+| `REDIS_CLUSTER_NODES` | 参见 dev 配置 | Redis Cluster 种子节点 |
+| `SPRING_KAFKA_BOOTSTRAP_SERVERS` | Spring 默认值 | Kafka bootstrap servers |
+
+例如，在已配置集群与 topic 的开发环境中启动 API：
+
+```bash
+SPRING_PROFILES_ACTIVE=dev RELAY_ENABLED=true REDIS_CLUSTER_NODES=localhost:7001,localhost:7002,localhost:7003 \
+  SPRING_KAFKA_BOOTSTRAP_SERVERS=localhost:9092 java -jar flash-sale-api/target/flash-sale-api-0.0.1-SNAPSHOT.jar
+```
+
+多个 API 实例启用时各自运行任务，没有跨实例租约或协调，会重复扫描和可能重复发布；应规划实例配置并保证消费者幂等。
+凭据应通过安全的环境或密钥管理系统提供。relay 本身没有专用指标或 metrics 端点，不能依赖 API 的通用 Actuator 指标监控 relay 积压或投递。
 
 ```bash
 curl -X POST http://localhost:8081/api/v1/flash_sale_event/1/product/2 \
@@ -321,59 +376,6 @@ curl -X POST http://localhost:8081/api/v1/flash_sale_event/1/product/2 \
 128 个字符。冲突、无库存或活动未运行返回 409，商品缺失返回 404，输入无效返回 400，库存不可用返回 503。
 接口不校验用户是否存在，也不执行每用户购买限制；请求头没有身份认证或授权。Redis 超时的结果可能不明确，
 不能假定预扣未发生。独立 Kafka 消费者的数据库预订逻辑不受此 API 更改影响。
-
-### Redis Reservation Admission
-
-**Current implementation warning:** The Redis admission and provisioning workflow described
-below is not implemented in the current source tree. The API calls the experimental Redis primitive
-and directly publishes new reservations to Kafka without a recoverable relay; the consumer's `OrderService`
-still writes directly to PostgreSQL. Do not use the instructions below to
-provision or reconcile Redis, or rely on them for inventory safety. There is no bootstrap
-command for that design or reliable Kafka handoff. The existing PostgreSQL conditional update and idempotency
-constraint remain in place. The separate experimental primitives above have a manual prefill
-command, but do not implement the admission design below.
-
-Reservations require Redis first. It is disabled by default, and disabled, unavailable,
-missing, expired or invalid state returns 503, not a database fallback. Configure an
-existing Redis with `INVENTORY_CACHE_ENABLED=true`, `REDIS_HOST`, `REDIS_PORT` and, if
-needed, `REDIS_USERNAME` and `REDIS_PASSWORD` via environment or secret management.
-No endpoint is provisioned here; Redis health checks are disabled. Timeouts are 200 ms.
-Redis zero rejects with 409 before PostgreSQL; stale low stock can reject valid orders.
-PostgreSQL's conditional update remains authoritative. There is no Kafka handoff yet.
-
-Lua stores stock and global SHA-256 idempotency markers in the single persistent hash
-`flashsale:{reservation}:state`, in one Redis Cluster slot (a potential hot slot).
-Pending and completed markers have no TTL and grow without bound. A pending/unknown
-request returns 503; a completed matching request replays its original order ID, and a
-different binding returns 409. A failed or ambiguous Redis call or database commit can
-leave a pending marker and reduced stock. Finalization happens only after confirmed DB
-commit. Only confirmed business rollbacks release admission; existing DB replays restore
-the extra Redis decrement atomically while recording the original order ID.
-
-Redis and PostgreSQL are not an atomic transaction. Configure durable Redis persistence,
-appropriate replication/failover and no eviction, monitor capacity, and prevent other
-clients from modifying this reserved key. Redis data loss, rollback after failover, partial
-manual edits or restoring an old snapshot cannot be detected reliably and can violate
-idempotency or availability. Stop admissions and reconcile after any such incident; do
-not automatically repopulate or reset state while traffic runs. PostgreSQL still prevents
-overselling, but cannot make a lost Redis marker safe. Stock changes outside this path,
-including administrative changes, require the same controlled reconciliation.
-
-**Operator provisioning and reconciliation:** pause all reservation writers across all
-instances, wait for every in-flight request and resolve unknown database commits using
-authoritative PostgreSQL records and transaction status. Back up and inspect both stores.
-Only once quiescence and database outcomes are proven, rebuild or correct the hash from
-the database: `schema` must be `1`, and each `s:<eventId>:<eventProductId>` field is
-`allocated_quantity - sold_quantity - reserved_quantity`, a nonnegative decimal integer
-at most 999999999999999. Provision missing state manually, without TTL, using a controlled
-Redis client. Preserve completed markers, or reconstruct `idem:<idempotencyKey>` as
-`<eventId>:<eventProductId>:<userId>:D:<orderId>` from verified orders. Resolve pending
-markers individually against PostgreSQL; clear a stale marker only after proving no
-commit can occur and accounting for its inventory. Never clear completed markers without
-an explicit idempotency retention policy and verified database reconciliation. Verify the
-entire hash, durability and no expiry before resuming writers. If outcomes cannot be
-proven, keep affected operations blocked and escalate. `userId` is caller supplied and
-unauthenticated, so idempotency replay and ordering are not safe for production use.
 
 ## Simulated Payment
 
@@ -433,6 +435,7 @@ before it can exercise the reservation endpoint.
 2. `flash-sale-api/src/main/java/`：API 应用入口、controller 和配置。
 3. `message-contract/src/main/java/`：消息契约。
 4. `order-consumer/src/main/java/`：独立消费者、消息处理和数据库预留服务。
+5. `flash-sale-api/src/main/java/com/webapps/flashsale/relay/`：Redis outbox 扫描和 Kafka 发布任务。
 
 `@RestController` 的返回值会由 Spring MVC 序列化为 JSON；内嵌的
 Tomcat 负责接收 HTTP 请求。服务默认监听 8081 端口。

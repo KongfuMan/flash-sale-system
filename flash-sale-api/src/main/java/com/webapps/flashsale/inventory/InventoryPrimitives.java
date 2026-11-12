@@ -1,5 +1,7 @@
 package com.webapps.flashsale.inventory;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.webapps.flashsale.entity.FlashSaleEventProductEntity;
 import com.webapps.flashsale.repository.FlashSaleEventProductRepository;
 import com.webapps.flashsale.repository.FlashSaleEventRepository;
@@ -19,6 +21,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class InventoryPrimitives {
     static final int MAX_PRODUCTS = 1000;
+    private static final ObjectMapper MARKER_MAPPER = new ObjectMapper();
     private static final DefaultRedisScript<Long> PREFILL = script("prefill");
     private static final DefaultRedisScript<Long> ACTIVATE = script("activate");
     private static final DefaultRedisScript<String> RESERVE = reserveScript();
@@ -69,16 +72,23 @@ public class InventoryPrimitives {
         return result == 1;
     }
 
-    public InventoryReservationResult reserve(long flashSaleEventId, long productId, long userId, String idempotencyKey) {
+    public InventoryReservationResult reserve(long flashSaleEventId, long productId, long userId, String idempotencyKey, String payload) {
         if (flashSaleEventId <= 0 || productId <= 0 || userId <= 0 || idempotencyKey == null
-                || idempotencyKey.isBlank() || idempotencyKey.length() > 128) {
+                || idempotencyKey.isBlank() || idempotencyKey.length() > 128 || payload == null || payload.isBlank()) {
             return InventoryReservationResult.INVALID_ARGUMENT;
         }
 
         String key = key(flashSaleEventId);
         String requestId = sha256(flashSaleEventId + ":" + idempotencyKey);
+        String marker;
+        try {
+            marker = MARKER_MAPPER.writeValueAsString(InventoryMarker.pending(
+                    idempotencyKey, requestId, flashSaleEventId, productId, userId));
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Unable to serialize inventory marker", ex);
+        }
         String result = redis.execute(RESERVE, List.of(key), Long.toString(flashSaleEventId), Long.toString(productId),
-                Long.toString(userId), idempotencyKey, requestId);
+                Long.toString(userId), idempotencyKey, requestId, marker, payload);
 
         try {
             var parsed = InventoryReservationResult.valueOf(result);

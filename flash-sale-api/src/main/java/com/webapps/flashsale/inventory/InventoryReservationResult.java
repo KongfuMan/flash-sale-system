@@ -3,6 +3,7 @@ package com.webapps.flashsale.inventory;
 public enum InventoryReservationResult {
     RESERVED,
     REPLAY,
+    LEGACY_REPLAY,
     CONFLICT,
     OUT_OF_STOCK,
     MISSING_EVENT,

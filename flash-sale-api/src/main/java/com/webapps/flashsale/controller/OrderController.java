@@ -47,9 +47,9 @@ public class OrderController {
 
         var result = orders.reserve(flashSaleEventId, flashSaleProductId, userId, idempotencyKey);
         return switch (result) {
-            case RESERVED -> ResponseEntity.accepted().body(Map.of("status", "PENDING"));
-            case REPLAY -> ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .body(new ErrorResponse("Reservation already exists; Kafka delivery cannot be confirmed"));
+            case RESERVED, REPLAY -> ResponseEntity.accepted().body(Map.of("status", "PENDING"));
+            case LEGACY_REPLAY -> ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(new ErrorResponse("Legacy reservation delivery cannot be confirmed; manual reconciliation required"));
             case INVALID_ARGUMENT -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid reservation request");
             case CONFLICT -> throw new ResponseStatusException(HttpStatus.CONFLICT, "Idempotency key already used for another request");
             case OUT_OF_STOCK -> throw new ResponseStatusException(HttpStatus.CONFLICT, "Product out of stock");

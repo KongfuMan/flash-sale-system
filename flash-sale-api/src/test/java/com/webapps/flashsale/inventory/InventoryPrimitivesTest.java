@@ -50,24 +50,26 @@ class InventoryPrimitivesTest {
     @Test void mapsReserveFailuresAndRejectsInvalidIds() {
         when(redis.execute(any(RedisScript.class), anyList(), any(Object[].class))).thenReturn(
                 "MISSING_EVENT", "INVALID_STATE", "EVENT_NOT_RUNNING", "MISSING_PRODUCT",
-                "OUT_OF_STOCK", "RESERVED", "REPLAY", "CONFLICT");
+                "OUT_OF_STOCK", "RESERVED", "REPLAY", "LEGACY_REPLAY", "CONFLICT");
         for (var expected : new InventoryReservationResult[] {InventoryReservationResult.MISSING_EVENT,
                 InventoryReservationResult.INVALID_STATE, InventoryReservationResult.EVENT_NOT_RUNNING,
                 InventoryReservationResult.MISSING_PRODUCT, InventoryReservationResult.OUT_OF_STOCK,
-                InventoryReservationResult.RESERVED, InventoryReservationResult.REPLAY, InventoryReservationResult.CONFLICT}) {
-            assertEquals(expected, inventory.reserve(1, 2, 3, "key"));
+                InventoryReservationResult.RESERVED, InventoryReservationResult.REPLAY,
+                InventoryReservationResult.LEGACY_REPLAY, InventoryReservationResult.CONFLICT}) {
+            assertEquals(expected, inventory.reserve(1, 2, 3, "key", "payload"));
         }
-        assertEquals(InventoryReservationResult.INVALID_ARGUMENT, inventory.reserve(0, 2, 3, "key"));
-        assertEquals(InventoryReservationResult.INVALID_ARGUMENT, inventory.reserve(1, 0, 3, "key"));
-        assertEquals(InventoryReservationResult.INVALID_ARGUMENT, inventory.reserve(1, 2, 0, "key"));
-        assertEquals(InventoryReservationResult.INVALID_ARGUMENT, inventory.reserve(1, 2, 3, null));
-        assertEquals(InventoryReservationResult.INVALID_ARGUMENT, inventory.reserve(1, 2, 3, "  "));
-        assertEquals(InventoryReservationResult.INVALID_ARGUMENT, inventory.reserve(1, 2, 3, "x".repeat(129)));
+        assertEquals(InventoryReservationResult.INVALID_ARGUMENT, inventory.reserve(0, 2, 3, "key", "payload"));
+        assertEquals(InventoryReservationResult.INVALID_ARGUMENT, inventory.reserve(1, 0, 3, "key", "payload"));
+        assertEquals(InventoryReservationResult.INVALID_ARGUMENT, inventory.reserve(1, 2, 0, "key", "payload"));
+        assertEquals(InventoryReservationResult.INVALID_ARGUMENT, inventory.reserve(1, 2, 3, null, "payload"));
+        assertEquals(InventoryReservationResult.INVALID_ARGUMENT, inventory.reserve(1, 2, 3, "  ", "payload"));
+        assertEquals(InventoryReservationResult.INVALID_ARGUMENT, inventory.reserve(1, 2, 3, "x".repeat(129), "payload"));
+        assertEquals(InventoryReservationResult.INVALID_ARGUMENT, inventory.reserve(1, 2, 3, "key", ""));
     }
 
     @Test void rejectsUnknownLuaResult() {
         when(redis.execute(any(RedisScript.class), anyList(), any(Object[].class))).thenReturn("UNKNOWN");
-        assertThrows(IllegalStateException.class, () -> inventory.reserve(1, 2, 3, "key"));
+        assertThrows(IllegalStateException.class, () -> inventory.reserve(1, 2, 3, "key", "payload"));
     }
 
     @Test void activationRequiresRunningDatabaseEventBeforeRedis() {
