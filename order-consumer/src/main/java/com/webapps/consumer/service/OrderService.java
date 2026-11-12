@@ -48,7 +48,7 @@ public class OrderService {
         }
         var request = event.data();
         var result = reserve(request.flashSaleEventId(), request.items().get(0).eventProductId(), request.userId(),
-                "kafka:" + event.messageId());
+                event.messageId().toString());
         log.info("Processed message {} for order {}", event.messageId(), result.orderId());
     }
 
