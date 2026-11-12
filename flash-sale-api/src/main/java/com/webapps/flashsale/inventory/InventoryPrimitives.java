@@ -49,10 +49,10 @@ public class InventoryPrimitives {
         this.redis = redis;
     }
 
-    public boolean prefill(long eventId) {
-        String key = key(eventId);
-        var event = events.findById(eventId).orElseThrow(() -> new IllegalArgumentException("Event not found"));
-        var eventProducts = products.findByEventId(eventId, PageRequest.of(0, MAX_PRODUCTS + 1));
+    public boolean prefill(long flashSaleEventId) {
+        String key = key(flashSaleEventId);
+        var event = events.findById(flashSaleEventId).orElseThrow(() -> new IllegalArgumentException("Event not found"));
+        var eventProducts = products.findByEventId(flashSaleEventId, PageRequest.of(0, MAX_PRODUCTS + 1));
         if (eventProducts.isEmpty() || eventProducts.size() > MAX_PRODUCTS) {
             throw new IllegalArgumentException("Event must have between 1 and " + MAX_PRODUCTS + " products");
         }
@@ -69,17 +69,16 @@ public class InventoryPrimitives {
         return result == 1;
     }
 
-    public InventoryReservationResult reserve(long eventId, long eventProductId, long userId, String idempotencyKey) {
-        if (eventId <= 0 || eventProductId <= 0 || userId <= 0 || idempotencyKey == null
+    public InventoryReservationResult reserve(long flashSaleEventId, long productId, long userId, String idempotencyKey) {
+        if (flashSaleEventId <= 0 || productId <= 0 || userId <= 0 || idempotencyKey == null
                 || idempotencyKey.isBlank() || idempotencyKey.length() > 128) {
             return InventoryReservationResult.INVALID_ARGUMENT;
         }
 
-        String key = key(eventId);
-        String digest = sha256(idempotencyKey);
-        String requestId = sha256(eventId + ":" + idempotencyKey);
-        String result = redis.execute(RESERVE, List.of(key), Long.toString(eventId), Long.toString(eventProductId),
-                Long.toString(userId), idempotencyKey, digest, requestId);
+        String key = key(flashSaleEventId);
+        String requestId = sha256(flashSaleEventId + ":" + idempotencyKey);
+        String result = redis.execute(RESERVE, List.of(key), Long.toString(flashSaleEventId), Long.toString(productId),
+                Long.toString(userId), idempotencyKey, requestId);
 
         try {
             var parsed = InventoryReservationResult.valueOf(result);

@@ -2,7 +2,7 @@
 -- Its value is a Redis hash containing these field -> value pairs:
 --   status              -> event status string, e.g. "RUNNING".
 --   prod:<eventProductId> -> available stock string, e.g. prod:456 -> "100".
---   idem:<key SHA-256>  -> JSON string for an accepted idempotency key:
+--   idem:<idempotencyKey> -> JSON string for an accepted idempotency key:
 --     {version: 1, status: "PENDING", idempotencyKey: <raw key>,
 --      requestId: <SHA-256 of eventId + ":" + raw key>,
 --      eventId: <string>, eventProductId: <string>, userId: <string>,
@@ -13,20 +13,20 @@
 -- returning REPLAY or CONFLICT without decrementing stock again. PENDING and
 -- message retain request details; they do not publish a message or create an order.
 -- IDs in binding and message are strings too. Markers have no per-field TTL.
--- ARGV: eventId, eventProductId, userId, raw key, key SHA-256, requestId.
+-- ARGV: eventId, eventProductId, userId, idempotencyKey, requestId.
 local keyType = redis.call('TYPE', KEYS[1]).ok
 if keyType == 'none' then return 'MISSING_EVENT' end
 if keyType ~= 'hash' then return 'INVALID_STATE' end
 
-local eventId, productId, userId, rawKey, digest, requestId = unpack(ARGV)
-local marker = redis.call('HGET', KEYS[1], 'idem:' .. digest)
+local eventId, productId, userId, idempotencyKey, requestId = unpack(ARGV)
+local marker = redis.call('HGET', KEYS[1], 'idem:' .. idempotencyKey)
 if marker then
     local ok, record = pcall(cjson.decode, marker)
     if not ok or type(record) ~= 'table' or record.version ~= 1 or record.status ~= 'PENDING'
         or type(record.binding) ~= 'table' or type(record.message) ~= 'table'
         or type(record.eventProductId) ~= 'string' or type(record.userId) ~= 'string'
         or record.eventId ~= eventId
-        or record.requestId ~= requestId or record.idempotencyKey ~= rawKey
+        or record.requestId ~= requestId or record.idempotencyKey ~= idempotencyKey
         or record.binding.eventId ~= record.eventId or record.binding.eventProductId ~= record.eventProductId
         or record.binding.userId ~= record.userId or record.message.eventId ~= record.eventId
         or record.message.eventProductId ~= record.eventProductId or record.message.userId ~= record.userId
@@ -47,7 +47,7 @@ if n > 2147483647 then return 'INVALID_STATE' end
 if n == 0 then return 'OUT_OF_STOCK' end
 
 local record = {
-    version = 1, status = 'PENDING', idempotencyKey = rawKey, requestId = requestId,
+    version = 1, status = 'PENDING', idempotencyKey = idempotencyKey, requestId = requestId,
     eventId = eventId, eventProductId = productId, userId = userId,
     binding = {eventId = eventId, eventProductId = productId, userId = userId},
     message = {requestId = requestId, eventId = eventId, eventProductId = productId, userId = userId}
@@ -55,5 +55,5 @@ local record = {
 local ok, encoded = pcall(cjson.encode, record)
 if not ok then return 'INVALID_STATE' end
 -- Redis scripts do not roll back on error: the only mutation must be one command.
-redis.call('HSET', KEYS[1], 'prod:' .. productId, tostring(n - 1), 'idem:' .. digest, encoded)
+redis.call('HSET', KEYS[1], 'prod:' .. productId, tostring(n - 1), 'idem:' .. idempotencyKey, encoded)
 return 'RESERVED'

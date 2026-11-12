@@ -2,9 +2,6 @@ package com.webapps.flashsale.inventory;
 
 import com.webapps.flashsale.repository.FlashSaleEventProductRepository;
 import com.webapps.flashsale.repository.FlashSaleEventRepository;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import org.junit.jupiter.api.Test;
@@ -35,17 +32,16 @@ class InventoryMarkerPrefixTest {
             redis.opsForHash().put(key, "prod:1", "2");
             var inventory = new InventoryPrimitives(mock(FlashSaleEventRepository.class),
                     mock(FlashSaleEventProductRepository.class), redis);
-            var digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest("request".getBytes(StandardCharsets.UTF_8)));
-            assertEquals(InventoryReservationResult.RESERVED, inventory.reserve(id, 1, 2, "request"));
-            String field = "idem:" + digest;
+            String request = "8c4eb4f3-860d-4da0-962d-15490e49dc7c";
+            assertEquals(InventoryReservationResult.RESERVED, inventory.reserve(id, 1, 2, request));
+            String field = "idem:" + request;
             var marker = redis.opsForHash().get(key, field);
             assertNotNull(marker);
-            assertEquals(InventoryReservationResult.REPLAY, inventory.reserve(id, 1, 2, "request"));
-            assertEquals(InventoryReservationResult.CONFLICT, inventory.reserve(id, 1, 3, "request"));
+            assertEquals(InventoryReservationResult.REPLAY, inventory.reserve(id, 1, 2, request));
+            assertEquals(InventoryReservationResult.CONFLICT, inventory.reserve(id, 1, 3, request));
             assertEquals("1", redis.opsForHash().get(key, "prod:1"));
             redis.opsForHash().put(key, field, "{}");
-            assertEquals(InventoryReservationResult.INVALID_STATE, inventory.reserve(id, 1, 2, "request"));
+            assertEquals(InventoryReservationResult.INVALID_STATE, inventory.reserve(id, 1, 2, request));
             assertEquals("1", redis.opsForHash().get(key, "prod:1"));
         } finally {
             if (owned) redis.delete(key);

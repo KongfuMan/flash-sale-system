@@ -209,11 +209,12 @@ curl http://localhost:8081/api/v1/orders/1
 `InventoryPrimitives` 用于 API 的实验性 Redis 准入，独立于消费者的数据库 `OrderService`，不会在启动时自动预加载。
 `reserve(eventId, eventProductId, userId, idempotencyKey)` 是独立 Java API：ID 为正的 64 位整数，键非空白且最多 128 个字符。
 同一活动内相同键和绑定重试返回 `REPLAY`，不同商品或用户返回 `CONFLICT`；即使活动已结束或库存为零也先检查重试。
-首次成功返回 `RESERVED`，在同一 hash 中以一次 `HSET` 同时扣减库存并写入 `idem:<sha256-hex-of-UTF8-key>` JSON
+首次成功返回 `RESERVED`，在同一 hash 中以一次 `HSET` 同时扣减库存并写入 `idem:<idempotencyKey>` JSON
 待处理记录。记录包含版本、绑定、原始幂等键、确定性 requestId（SHA-256，输入为活动 ID、冒号和原始键的 UTF-8）、
 `PENDING` 状态和消息载荷；ID 存为字符串。原始键是敏感数据，必须限制 Redis 读取和日志访问。
-记录无 TTL、不自动删除，空间会持续增长；未知或损坏记录失败关闭。脚本不再读取旧 `i:` 标记；切换前必须停止所有
-写入并等待在途操作结束，安全迁移和核对旧标记后才能使用 `idem:`。旧版写入方也不能与新版混合运行。
+记录无 TTL、不自动删除，空间会持续增长；未知或损坏记录失败关闭。脚本不读取旧 `i:` 或
+`idem:<sha256>` 标记；切换前必须停止所有写入并等待在途操作结束，安全迁移和核对旧标记后才能恢复。
+旧版写入方不能与新版混合运行。
 不同活动允许使用相同键；Kafka 消息 ID 由活动 ID 和幂等键确定，消费者使用 `kafka:<messageId>` 作为全局数据库
 幂等键。其他数据库写入方不得使用该命名空间；此设计仍需配合跨系统对账验证。
 
@@ -364,7 +365,7 @@ Only once quiescence and database outcomes are proven, rebuild or correct the ha
 the database: `schema` must be `1`, and each `s:<eventId>:<eventProductId>` field is
 `allocated_quantity - sold_quantity - reserved_quantity`, a nonnegative decimal integer
 at most 999999999999999. Provision missing state manually, without TTL, using a controlled
-Redis client. Preserve completed markers, or reconstruct `idem:<sha256-hex-of-UTF8-key>` as
+Redis client. Preserve completed markers, or reconstruct `idem:<idempotencyKey>` as
 `<eventId>:<eventProductId>:<userId>:D:<orderId>` from verified orders. Resolve pending
 markers individually against PostgreSQL; clear a stale marker only after proving no
 commit can occur and accounting for its inventory. Never clear completed markers without
