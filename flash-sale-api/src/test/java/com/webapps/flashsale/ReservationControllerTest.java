@@ -13,8 +13,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 class ReservationControllerTest {
     private final OrderService reservations = mock(OrderService.class);
+    private final com.webapps.consumer.service.OrderService consumerOrders = mock(com.webapps.consumer.service.OrderService.class);
     private final org.springframework.test.web.servlet.MockMvc mvc = MockMvcBuilders.standaloneSetup(
-            new OrderController(reservations))
+            new OrderController(reservations, consumerOrders))
             .setControllerAdvice(new GlobalExceptionHandler()).build();
 
     @Test

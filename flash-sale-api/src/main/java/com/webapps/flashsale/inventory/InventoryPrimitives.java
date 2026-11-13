@@ -3,14 +3,11 @@ package com.webapps.flashsale.inventory;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.webapps.flashsale.entity.FlashSaleEventProductEntity;
+import com.webapps.flashsale.outbox.OutboxKeys;
 import com.webapps.flashsale.repository.FlashSaleEventProductRepository;
 import com.webapps.flashsale.repository.FlashSaleEventRepository;
 import java.util.ArrayList;
 import java.util.List;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -53,7 +50,7 @@ public class InventoryPrimitives {
     }
 
     public boolean prefill(long flashSaleEventId) {
-        String key = key(flashSaleEventId);
+        String key = OutboxKeys.eventKey(flashSaleEventId);
         var event = events.findById(flashSaleEventId).orElseThrow(() -> new IllegalArgumentException("Event not found"));
         var eventProducts = products.findByEventId(flashSaleEventId, PageRequest.of(0, MAX_PRODUCTS + 1));
         if (eventProducts.isEmpty() || eventProducts.size() > MAX_PRODUCTS) {
@@ -78,8 +75,8 @@ public class InventoryPrimitives {
             return InventoryReservationResult.INVALID_ARGUMENT;
         }
 
-        String key = key(flashSaleEventId);
-        String requestId = sha256(flashSaleEventId + ":" + idempotencyKey);
+        String key = OutboxKeys.eventKey(flashSaleEventId);
+        String requestId = OutboxKeys.requestId(flashSaleEventId, idempotencyKey);
         String marker;
         try {
             marker = MARKER_MAPPER.writeValueAsString(InventoryMarker.pending(
@@ -102,19 +99,11 @@ public class InventoryPrimitives {
         }
     }
 
-    private static String sha256(String value) {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 unavailable", e);
-        }
-    }
-
     /** Operator call activate to turn the status of inactive event into RUNNING in redis.
      * Caller must keep event writers quiescent across the database read and Redis update.
      * */
     public ActivationResult activate(long eventId) {
-        String key = key(eventId);
+        String key = OutboxKeys.eventKey(eventId);
         var event = events.findById(eventId).orElseThrow(() -> new IllegalArgumentException("Event not found"));
         if (!"RUNNING".equals(event.status)) {
             throw new IllegalStateException("Database event is not RUNNING");
@@ -127,10 +116,5 @@ public class InventoryPrimitives {
             case -2 -> ActivationResult.INVALID_STATE;
             default -> throw new IllegalStateException("Unknown activation result: " + result);
         };
-    }
-
-    private static String key(long eventId) {
-        if (eventId <= 0) throw new IllegalArgumentException("Invalid event ID");
-        return "flashsale:inventory:v1:{event:" + eventId + "}";
     }
 }

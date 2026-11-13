@@ -1,12 +1,19 @@
 -- Initial schema based on the coordinator's local business tables. Citus distribution is
 -- intentionally absent: none of these tables is distributed or a reference table.
+-- Constraints encode the current design invariants: positive 64-bit identifiers,
+-- single-item orders with quantity 1, idempotent order creation, consistent
+-- event/product references, and at most one successful payment per order.
 
 CREATE TABLE public.users (
     user_id bigint NOT NULL,
     username character varying(50) NOT NULL,
     password_hash varchar(255),
-    created_at timestamp without time zone DEFAULT now(),
-    CONSTRAINT users_pkey PRIMARY KEY (user_id)
+    created_at timestamp without time zone DEFAULT now() NOT NULL,
+    CONSTRAINT users_user_id_check CHECK (user_id > 0),
+    CONSTRAINT users_username_check CHECK (btrim(username) <> ''),
+    CONSTRAINT users_password_hash_check CHECK (password_hash IS NULL OR btrim(password_hash) <> ''),
+    CONSTRAINT users_pkey PRIMARY KEY (user_id),
+    CONSTRAINT users_username_key UNIQUE (username)
 );
 
 CREATE TABLE public.products (
@@ -14,10 +21,13 @@ CREATE TABLE public.products (
     name character varying(255) NOT NULL,
     total_inventory integer NOT NULL,
     unit_price real NOT NULL DEFAULT 0.0,
-    created_at timestamp without time zone DEFAULT now(),
-    updated_at timestamp without time zone DEFAULT now(),
+    created_at timestamp without time zone DEFAULT now() NOT NULL,
+    updated_at timestamp without time zone DEFAULT now() NOT NULL,
+    CONSTRAINT products_product_id_check CHECK (product_id > 0),
+    CONSTRAINT products_name_check CHECK (btrim(name) <> ''),
     CONSTRAINT products_total_inventory_check CHECK (total_inventory >= 0),
-    CONSTRAINT products_unit_price_check CHECK (unit_price >= 0),
+    CONSTRAINT products_unit_price_check CHECK (unit_price >= 0 AND unit_price NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
+    CONSTRAINT products_timestamps_check CHECK (updated_at >= created_at),
     CONSTRAINT products_pkey PRIMARY KEY (product_id)
 );
 
@@ -27,7 +37,9 @@ CREATE TABLE public.flash_sale_events (
     start_at timestamp without time zone NOT NULL,
     end_at timestamp without time zone NOT NULL,
     status character varying(20) NOT NULL,
-    created_at timestamp without time zone DEFAULT now(),
+    created_at timestamp without time zone DEFAULT now() NOT NULL,
+    CONSTRAINT flash_sale_events_event_id_check CHECK (event_id > 0),
+    CONSTRAINT flash_sale_events_name_check CHECK (btrim(name) <> ''),
     CONSTRAINT flash_sale_events_check CHECK (end_at > start_at),
     CONSTRAINT flash_sale_events_status_check CHECK (status::text = ANY (ARRAY['UPCOMING'::character varying, 'RUNNING'::character varying, 'ENDED'::character varying, 'CANCELED'::character varying]::text[])),
     CONSTRAINT flash_sale_events_pkey PRIMARY KEY (event_id)
@@ -42,17 +54,22 @@ CREATE TABLE public.flash_sale_event_products (
     sold_quantity integer DEFAULT 0 NOT NULL,
     flash_price numeric(10,2) NOT NULL,
     per_user_limit integer DEFAULT 1 NOT NULL,
-    created_at timestamp without time zone DEFAULT now(),
-    updated_at timestamp without time zone DEFAULT now(),
-    CONSTRAINT chk_reserved_le_allocated CHECK (reserved_quantity <= allocated_quantity),
-    CONSTRAINT chk_sold_plus_reserved_le_allocated CHECK (sold_quantity + reserved_quantity <= allocated_quantity),
+    created_at timestamp without time zone DEFAULT now() NOT NULL,
+    updated_at timestamp without time zone DEFAULT now() NOT NULL,
+    CONSTRAINT flash_sale_event_products_ids_check CHECK (event_product_id > 0 AND event_id > 0 AND product_id > 0),
     CONSTRAINT flash_sale_event_products_allocated_quantity_check CHECK (allocated_quantity > 0),
-    CONSTRAINT flash_sale_event_products_check CHECK (sold_quantity <= allocated_quantity),
-    CONSTRAINT flash_sale_event_products_per_user_limit_check CHECK (per_user_limit >= 1),
     CONSTRAINT flash_sale_event_products_reserved_quantity_check CHECK (reserved_quantity >= 0),
     CONSTRAINT flash_sale_event_products_sold_quantity_check CHECK (sold_quantity >= 0),
+    CONSTRAINT flash_sale_event_products_flash_price_check CHECK (flash_price >= 0 AND flash_price NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)),
+    CONSTRAINT flash_sale_event_products_per_user_limit_check CHECK (per_user_limit >= 1),
+    CONSTRAINT chk_reserved_le_allocated CHECK (reserved_quantity <= allocated_quantity),
+    CONSTRAINT chk_sold_plus_reserved_le_allocated CHECK (sold_quantity + reserved_quantity <= allocated_quantity),
+    CONSTRAINT flash_sale_event_products_check CHECK (sold_quantity <= allocated_quantity),
+    CONSTRAINT flash_sale_event_products_timestamps_check CHECK (updated_at >= created_at),
     CONSTRAINT flash_sale_event_products_pkey PRIMARY KEY (event_product_id),
     CONSTRAINT flash_sale_event_products_event_id_product_id_key UNIQUE (event_id, product_id),
+    CONSTRAINT flash_sale_event_products_event_id_event_product_id_key UNIQUE (event_id, event_product_id),
+    CONSTRAINT flash_sale_event_products_event_product_id_product_id_key UNIQUE (event_product_id, product_id),
     CONSTRAINT flash_sale_event_products_event_id_fkey FOREIGN KEY (event_id) REFERENCES public.flash_sale_events(event_id) ON DELETE RESTRICT,
     CONSTRAINT flash_sale_event_products_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(product_id) ON DELETE RESTRICT
 );
@@ -60,18 +77,26 @@ CREATE TABLE public.flash_sale_event_products (
 CREATE TABLE public.orders (
     order_id bigint NOT NULL,
     user_id bigint NOT NULL,
-    event_id bigint,
-    event_product_id bigint,
+    event_id bigint NOT NULL,
+    event_product_id bigint NOT NULL,
     status character varying(20) NOT NULL,
-    idempotency_key character varying(128),
+    idempotency_key character varying(128) NOT NULL,
     expires_at timestamp without time zone NOT NULL,
-    created_at timestamp without time zone DEFAULT now(),
-    updated_at timestamp without time zone DEFAULT now(),
+    created_at timestamp without time zone DEFAULT now() NOT NULL,
+    updated_at timestamp without time zone DEFAULT now() NOT NULL,
+    CONSTRAINT orders_order_id_check CHECK (order_id > 0),
+    CONSTRAINT orders_user_id_check CHECK (user_id > 0),
+    CONSTRAINT orders_event_product_ids_check CHECK (event_id > 0 AND event_product_id > 0),
+    CONSTRAINT orders_idempotency_key_check CHECK (btrim(idempotency_key) <> ''),
+    CONSTRAINT orders_expires_after_created_check CHECK (expires_at > created_at),
+    CONSTRAINT orders_timestamps_check CHECK (updated_at >= created_at),
     CONSTRAINT orders_status_check CHECK (status::text = ANY (ARRAY['PENDING_PAYMENT'::character varying, 'PAID'::character varying, 'CANCELED'::character varying, 'EXPIRED'::character varying, 'FAILED'::character varying]::text[])),
     CONSTRAINT orders_pkey PRIMARY KEY (order_id),
     CONSTRAINT orders_idempotency_key_key UNIQUE (idempotency_key),
+    CONSTRAINT orders_order_id_event_product_id_key UNIQUE (order_id, event_product_id),
     CONSTRAINT orders_event_id_fkey FOREIGN KEY (event_id) REFERENCES public.flash_sale_events(event_id) ON DELETE RESTRICT,
     CONSTRAINT orders_event_product_id_fkey FOREIGN KEY (event_product_id) REFERENCES public.flash_sale_event_products(event_product_id) ON DELETE RESTRICT,
+    CONSTRAINT orders_event_id_event_product_id_fkey FOREIGN KEY (event_id, event_product_id) REFERENCES public.flash_sale_event_products(event_id, event_product_id) ON DELETE RESTRICT,
     CONSTRAINT orders_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id) ON DELETE RESTRICT
 );
 
@@ -84,12 +109,16 @@ CREATE TABLE public.order_items (
     order_item_id bigint NOT NULL,
     order_id bigint NOT NULL,
     product_id bigint NOT NULL,
-    event_product_id bigint,
+    event_product_id bigint NOT NULL,
     quantity integer DEFAULT 1 NOT NULL,
     unit_price_snapshot numeric(10,2) NOT NULL,
-    CONSTRAINT order_items_quantity_check CHECK (quantity > 0),
-    CONSTRAINT order_items_unit_price_snapshot_check CHECK (unit_price_snapshot >= 0::numeric),
+    CONSTRAINT order_items_ids_check CHECK (order_item_id > 0 AND order_id > 0 AND product_id > 0 AND event_product_id > 0),
+    CONSTRAINT order_items_quantity_check CHECK (quantity = 1),
+    CONSTRAINT order_items_unit_price_snapshot_check CHECK (unit_price_snapshot >= 0::numeric AND unit_price_snapshot NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)),
     CONSTRAINT order_items_pkey PRIMARY KEY (order_item_id),
+    CONSTRAINT order_items_order_id_key UNIQUE (order_id),
+    CONSTRAINT order_items_order_id_event_product_id_fkey FOREIGN KEY (order_id, event_product_id) REFERENCES public.orders(order_id, event_product_id) ON DELETE CASCADE,
+    CONSTRAINT order_items_event_product_id_product_id_fkey FOREIGN KEY (event_product_id, product_id) REFERENCES public.flash_sale_event_products(event_product_id, product_id) ON DELETE RESTRICT,
     CONSTRAINT order_items_event_product_id_fkey FOREIGN KEY (event_product_id) REFERENCES public.flash_sale_event_products(event_product_id) ON DELETE RESTRICT,
     CONSTRAINT order_items_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(order_id) ON DELETE CASCADE,
     CONSTRAINT order_items_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(product_id) ON DELETE RESTRICT
@@ -107,11 +136,20 @@ CREATE TABLE public.order_payment (
     payment_method character varying(30),
     status character varying(20) NOT NULL,
     transaction_id character varying(128),
-    created_at timestamp without time zone DEFAULT now(),
+    created_at timestamp without time zone DEFAULT now() NOT NULL,
     paid_at timestamp without time zone,
-    CONSTRAINT order_payment_amount_check CHECK (amount >= 0::numeric),
+    CONSTRAINT order_payment_ids_check CHECK (payment_id > 0 AND order_id > 0),
+    CONSTRAINT order_payment_amount_check CHECK (amount >= 0::numeric AND amount NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)),
+    CONSTRAINT order_payment_payment_method_check CHECK (payment_method IS NULL OR btrim(payment_method) <> ''),
+    CONSTRAINT order_payment_transaction_id_check CHECK (transaction_id IS NULL OR btrim(transaction_id) <> ''),
+    CONSTRAINT order_payment_paid_at_check CHECK (paid_at IS NULL OR paid_at >= created_at),
+    CONSTRAINT order_payment_success_fields_check CHECK (status <> 'SUCCESS' OR (transaction_id IS NOT NULL AND paid_at IS NOT NULL)),
     CONSTRAINT order_payment_status_check CHECK (status::text = ANY (ARRAY['INIT'::character varying, 'SUCCESS'::character varying, 'FAILED'::character varying, 'REFUNDED'::character varying]::text[])),
     CONSTRAINT order_payment_pkey PRIMARY KEY (payment_id),
     CONSTRAINT order_payment_transaction_id_key UNIQUE (transaction_id),
     CONSTRAINT order_payment_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(order_id) ON DELETE RESTRICT
 );
+
+CREATE UNIQUE INDEX order_payment_order_id_success_key
+    ON public.order_payment (order_id)
+    WHERE status = 'SUCCESS';

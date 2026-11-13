@@ -12,6 +12,7 @@ import com.webapps.flashsale.entity.OrderItemEntity;
 import com.webapps.flashsale.entity.OrderEntity;
 import com.webapps.flashsale.inventory.InventoryPrimitives;
 import com.webapps.flashsale.inventory.InventoryReservationResult;
+import com.webapps.flashsale.outbox.RelayTrigger;
 import com.webapps.flashsale.repository.OrderItemRepository;
 import com.webapps.flashsale.repository.OrderRepository;
 import java.util.List;
@@ -22,6 +23,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -32,17 +37,26 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class OrderService {
+    private static final Logger log = LoggerFactory.getLogger(OrderService.class);
     private final OrderRepository orders;
     private final OrderItemRepository items;
     private final InventoryPrimitives inventory;
     private final ObjectMapper mapper;
+    private final ObjectProvider<RelayTrigger> relayTrigger;
 
+    @Autowired
     public OrderService(OrderRepository orders, OrderItemRepository items, InventoryPrimitives inventory,
-                        ObjectMapper mapper) {
+                        ObjectMapper mapper, ObjectProvider<RelayTrigger> relayTrigger) {
         this.orders = orders;
         this.items = items;
         this.inventory = inventory;
         this.mapper = mapper;
+        this.relayTrigger = relayTrigger;
+    }
+
+    public OrderService(OrderRepository orders, OrderItemRepository items, InventoryPrimitives inventory,
+                        ObjectMapper mapper) {
+        this(orders, items, inventory, mapper, null);
     }
 
     public InventoryReservationResult reserve(long flashSaleEventId, long eventProductId, long userId, String idempotencyKey) {
@@ -56,10 +70,26 @@ public class OrderService {
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("Unable to serialize order request", ex);
         }
+        final InventoryReservationResult result;
         try {
-            return inventory.reserve(flashSaleEventId, eventProductId, userId, idempotencyKey, payload);
+            result = inventory.reserve(flashSaleEventId, eventProductId, userId, idempotencyKey, payload);
         } catch (DataAccessException ex) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Inventory unavailable", ex);
+        }
+        if (result == InventoryReservationResult.RESERVED || result == InventoryReservationResult.REPLAY) {
+            triggerRelay(flashSaleEventId, idempotencyKey);
+        }
+        return result;
+    }
+
+    private void triggerRelay(long flashSaleEventId, String idempotencyKey) {
+        if (relayTrigger == null) return;
+        RelayTrigger trigger = relayTrigger.getIfAvailable();
+        if (trigger == null) return;
+        try {
+            trigger.enqueue(flashSaleEventId, idempotencyKey);
+        } catch (RuntimeException ex) {
+            log.warn("Relay trigger failed; periodic scan will retry", ex);
         }
     }
 

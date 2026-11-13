@@ -6,23 +6,26 @@ import java.util.Map;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Scope;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
-import org.springframework.scheduling.annotation.EnableScheduling;
 
 @Configuration(proxyBeanMethods = false)
-@EnableScheduling
 @ConditionalOnProperty(name = "relay.enabled", havingValue = "true")
 class RelayConfiguration {
-    @Bean(destroyMethod = "close")
+    @Bean(initMethod = "start", destroyMethod = "close")
+    @Scope(ConfigurableBeanFactory.SCOPE_SINGLETON)
     RelayWorker relayWorker(ObjectMapper mapper, LettuceConnectionFactory redis,
                             ProducerFactory<String, String> producerFactory,
                             @Value("${relay.topic:order-requests-v1}") String topic,
-                            @Value("${relay.timeout-ms:5000}") long timeoutMs) {
+                            @Value("${relay.timeout-ms:5000}") long timeoutMs,
+                            @Value("${relay.poll-ms:1000}") long pollMs,
+                            @Value("${relay.trigger-queue-capacity:10000}") int triggerQueueCapacity) {
         Map<String, Object> properties = new HashMap<>(producerFactory.getConfigurationProperties());
         Object acks = properties.get(ProducerConfig.ACKS_CONFIG);
         if (!"all".equals(String.valueOf(acks)) && !"-1".equals(String.valueOf(acks))) {
@@ -40,6 +43,7 @@ class RelayConfiguration {
         if (properties.containsKey(ProducerConfig.TRANSACTIONAL_ID_CONFIG)) {
             throw new IllegalArgumentException("Relay does not support a transactional.id");
         }
-        return new RelayWorker(mapper, redis, new DefaultKafkaProducerFactory<>(properties), topic, timeoutMs);
+        return new RelayWorker(mapper, redis, new DefaultKafkaProducerFactory<>(properties), topic, timeoutMs,
+                pollMs, triggerQueueCapacity);
     }
 }

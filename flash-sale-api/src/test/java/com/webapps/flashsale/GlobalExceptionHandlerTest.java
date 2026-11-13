@@ -20,11 +20,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 class GlobalExceptionHandlerTest {
     private final OrderService orders = mock(OrderService.class);
+    private final com.webapps.consumer.service.OrderService consumerOrders = mock(com.webapps.consumer.service.OrderService.class);
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        mvc = MockMvcBuilders.standaloneSetup(new OrderController(orders))
+        mvc = MockMvcBuilders.standaloneSetup(new OrderController(orders, consumerOrders))
                 .setControllerAdvice(new GlobalExceptionHandler()).build();
     }
 

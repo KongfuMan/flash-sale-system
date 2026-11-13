@@ -1,22 +1,16 @@
 package com.webapps.flashsale.relay;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.concurrent.ScheduledFuture;
+import com.webapps.flashsale.outbox.RelayTrigger;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
-import org.springframework.scheduling.TaskScheduler;
-import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
-import org.springframework.scheduling.config.TaskManagementConfigUtils;
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 class RelayConfigurationTest {
@@ -30,13 +24,11 @@ class RelayConfigurationTest {
     }
 
     private ApplicationContextRunner configured(LettuceConnectionFactory redis) {
-        TaskScheduler scheduler = mock(TaskScheduler.class);
-        doReturn(mock(ScheduledFuture.class)).when(scheduler).scheduleWithFixedDelay(any(Runnable.class), any(Instant.class), any(Duration.class));
         return context.withConfiguration(AutoConfigurations.of(KafkaAutoConfiguration.class))
                 .withBean(ObjectMapper.class, ObjectMapper::new)
                 .withBean(LettuceConnectionFactory.class, () -> redis)
-                .withBean(TaskScheduler.class, () -> scheduler)
-                .withPropertyValues("relay.enabled=true", "relay.poll-ms=1234",
+                .withPropertyValues("relay.enabled=true", "relay.poll-ms=60000",
+                        "relay.trigger-queue-capacity=8",
                         "spring.kafka.producer.acks=all",
                         "spring.kafka.producer.properties.enable.idempotence=true",
                         "spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer",
@@ -44,26 +36,22 @@ class RelayConfigurationTest {
     }
 
     @Test
-    void disabledByDefaultWithoutInfrastructureOrScheduler() {
+    void disabledByDefaultWithoutInfrastructure() {
         context.run(result -> {
             assertThat(result).hasNotFailed();
             assertThat(result).doesNotHaveBean(RelayWorker.class);
-            assertThat(result).doesNotHaveBean(TaskManagementConfigUtils.SCHEDULED_ANNOTATION_PROCESSOR_BEAN_NAME);
         });
         configured().withPropertyValues("relay.enabled=false").run(result -> {
             assertThat(result).hasNotFailed();
             assertThat(result).doesNotHaveBean(RelayWorker.class);
-            assertThat(result).doesNotHaveBean(TaskManagementConfigUtils.SCHEDULED_ANNOTATION_PROCESSOR_BEAN_NAME);
         });
     }
 
     @Test
-    void enabledRegistersScheduledWorkerWithoutConnecting() {
+    void enabledRegistersWorkerAndTriggerWithoutConnectingAtStartup() {
         configured().run(result -> {
             assertThat(result).hasNotFailed().hasSingleBean(RelayWorker.class);
-            var processor = result.getBean(ScheduledAnnotationBeanPostProcessor.class);
-            assertThat(processor.getScheduledTasks()).hasSize(1);
-            verify(result.getBean(TaskScheduler.class)).scheduleWithFixedDelay(any(Runnable.class), any(Instant.class), eq(Duration.ofMillis(1234)));
+            assertThat(result.getBean(RelayTrigger.class)).isSameAs(result.getBean(RelayWorker.class));
             verify(result.getBean(LettuceConnectionFactory.class), never()).getRequiredNativeClient();
         });
     }

@@ -17,6 +17,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -26,13 +27,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class OrderControllerTest {
     @Autowired private MockMvc mvc;
     @MockitoBean private OrderService orders;
+    @MockitoBean private com.webapps.consumer.service.OrderService consumerOrders;
 
     @Test
     void returnsOrdersWithoutAuthentication() throws Exception {
         when(orders.getOrders(0, 20)).thenReturn(new OrderPageResponse(List.of(
                 new OrderResponse(1L, 2L, null, null, "PENDING", null, null, null,
                         List.of(new OrderItemResponse(5L, 6L, null, 2, new BigDecimal("19.99"))))), 0, 20, true));
-        mvc.perform(get("/api/v1/event/1/orders"))
+        mvc.perform(get("/api/v1/flash_sale_event/1/orders"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.orders[0].orderId").value(1))
                 .andExpect(jsonPath("$.orders[0].userId").value(2))
@@ -45,7 +47,7 @@ class OrderControllerTest {
     @Test
     void returnsEmptyArrayWhenNoOrdersExist() throws Exception {
         when(orders.getOrders(1, 5)).thenReturn(new OrderPageResponse(List.of(), 1, 5, false));
-        mvc.perform(get("/api/v1/event/1/orders").param("page", "1").param("size", "5"))
+        mvc.perform(get("/api/v1/flash_sale_event/1/orders").param("page", "1").param("size", "5"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.orders.length()").value(0))
                 .andExpect(jsonPath("$.page").value(1));
@@ -53,16 +55,16 @@ class OrderControllerTest {
 
     @Test
     void rejectsInvalidPagination() throws Exception {
-        mvc.perform(get("/api/v1/event/1/orders").param("page", "-1")).andExpect(status().isBadRequest());
-        mvc.perform(get("/api/v1/event/1/orders").param("size", "101")).andExpect(status().isBadRequest());
-        mvc.perform(get("/api/v1/event/1/orders").param("size", "0")).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/flash_sale_event/1/orders").param("page", "-1")).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/flash_sale_event/1/orders").param("size", "101")).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/flash_sale_event/1/orders").param("size", "0")).andExpect(status().isBadRequest());
     }
 
     @Test
     void returnsOrderByIdWithItems() throws Exception {
         when(orders.getOrder(1L)).thenReturn(Optional.of(new OrderResponse(1L, 2L, null, null,
                 "PENDING", null, null, null, List.of(new OrderItemResponse(5L, 6L, null, 2, new BigDecimal("19.99"))))));
-        mvc.perform(get("/api/v1/event/1/orders/1"))
+        mvc.perform(get("/api/v1/flash_sale_event/1/order/1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.orderId").value(1))
                 .andExpect(jsonPath("$.items[0].orderItemId").value(5));
@@ -70,7 +72,20 @@ class OrderControllerTest {
 
     @Test
     void returnsNotFoundForMissingOrder() throws Exception {
-        when(orders.getOrder(99L)).thenReturn(Optional.empty());
-        mvc.perform(get("/api/v1/event/1/orders/99")).andExpect(status().isNotFound());
+                when(orders.getOrder(99L)).thenReturn(Optional.empty());
+        mvc.perform(get("/api/v1/flash_sale_event/1/order/99")).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void placesOrderDirectlyThroughConsumerWithoutAdmissionCache() throws Exception {
+        when(consumerOrders.reserve(1L, 2L, 3L, "key"))
+                .thenReturn(new com.webapps.consumer.service.OrderService.Result(42L, true));
+
+        mvc.perform(post("/api/v1/flash_sale_event/1/product/2/direct")
+                        .header("Idempotency-Key", "key")
+                        .header("UserId", "3"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.orderId").value(42))
+                .andExpect(jsonPath("$.status").value("PENDING_PAYMENT"));
     }
 }

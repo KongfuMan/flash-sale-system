@@ -14,8 +14,11 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api/v1/flash_sale_event/")
 public class OrderController {
     private final OrderService orders;
-    public OrderController(OrderService orders) {
+    private final com.webapps.consumer.service.OrderService consumerOrders;
+
+    public OrderController(OrderService orders, com.webapps.consumer.service.OrderService consumerOrders) {
         this.orders = orders;
+        this.consumerOrders = consumerOrders;
     }
 
     @GetMapping("{flashSaleEventId}/orders")
@@ -57,5 +60,20 @@ public class OrderController {
             case MISSING_PRODUCT -> throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Event product not found");
             case MISSING_EVENT, INVALID_STATE -> throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Inventory unavailable");
         };
+    }
+
+    @PostMapping("/{flashSaleEventId}/product/{flashSaleProductId}/direct")
+    public ResponseEntity<Map<String, Object>> placeOrderDirect(
+            @PathVariable long flashSaleEventId,
+            @PathVariable long flashSaleProductId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestHeader("UserId") long userId) {
+        if (flashSaleEventId <= 0 || flashSaleProductId <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "flashSaleEventId and flashSaleProductId must be positive");
+        }
+
+        var result = consumerOrders.reserve(flashSaleEventId, flashSaleProductId, userId, idempotencyKey);
+        return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK)
+                .body(Map.of("orderId", result.orderId(), "status", "PENDING_PAYMENT"));
     }
 }

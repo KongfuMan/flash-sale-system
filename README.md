@@ -199,7 +199,7 @@ curl http://localhost:8081/api/v1/orders/1
 默认 H2 数据库没有业务表，因此订单接口需要连接已初始化业务表的数据库。
 订单按 ID 升序分页，`page` 从 0 开始，`size` 默认 20、最大 100。响应包含 `orders`、
 `page`、`size`、`hasNext`，每个订单的 `items` 包含对应订单项。接口先查询订单页，
-再批量查询订单项；建议为 `order_items.order_id` 添加索引。已有数据库未自动修改。
+再批量查询订单项；V1 通过 `order_items.order_id` 上的唯一约束提供所需索引。已有数据库未自动修改。
 按 ID 查询不存在的订单时返回 HTTP 404。
 
 ## 预留订单
@@ -221,7 +221,7 @@ curl http://localhost:8081/api/v1/orders/1
 不同活动允许使用相同键；Kafka 消息 UUID 由活动 ID 和幂等键确定，消费者使用不带前缀的 UUID 字符串作为全局数据库
 幂等键。其他数据库写入方必须避免使用相同键；此设计仍需配合跨系统对账验证。
 
-这些记录只是 Redis hash 字段，不是 Redis Stream。API 写入 outbox，由启用的 API 定时任务发布；当前方案不可用于生产或当作实际订单库存保护，也不保证消息最终送达。
+这些记录只是 Redis hash 字段，不是 Redis Stream。API 写入 outbox，由启用的 API relay 后台 worker 发布；当前方案不可用于生产或当作实际订单库存保护，也不保证消息最终送达。
 
 预加载前必须停止所有涉及该活动的数据库和 Redis 库存写入，等待在途操作完成并核对数据，整个读取和
 预加载期间保持静止；数据库读取与 Redis 写入并非原子操作。使用具有数据库只读权限及受限 Redis 权限的
@@ -312,10 +312,12 @@ SPRING_PROFILES_ACTIVE=dev SPRING_KAFKA_BOOTSTRAP_SERVERS=localhost:9092 \
 `{"status":"PENDING"}`，不代表订单已创建或消息已发布。版本 1/2 标记的匹配重试返回 503，必须人工对账，不能推断历史投递结果。Redis 超时的结果可能不明确，不能盲目回补库存。
 此流程仅供实验，不要在生产或无法恢复库存的数据上使用。
 
-### Redis Outbox 与 API 定时 Relay
+### Redis Outbox 与 API Relay
 
-API 写入 outbox，不直接发送 Kafka；relay 作为 `flash-sale-api` 内的 `@Scheduled` 任务运行，不再单独构建或部署。
-定时任务默认关闭；如未启用，新的 outbox 消息会一直保留在 Redis 中，不会自动发布。
+API 写入 outbox，不直接发送 Kafka；relay 作为 `flash-sale-api` 内的后台 worker 运行，不再单独构建或部署。
+relay 默认关闭；如未启用，新的 outbox 消息会一直保留在 Redis 中，不会自动发布。
+成功准入（`RESERVED` 或 `REPLAY`）后，请求线程只向容量有限的内存队列投递一个尽力而为的提示，不等待 Kafka；
+队列满、提示丢失或 relay 失败时，周期性全量扫描仍会补发，正确性不依赖提示。
 
 每次新的成功预扣在同一活动 hash 内，以单个 `HSET` 同时写入递减后的 `prod:<eventProductId>`、
 持久的 `idem:<idempotencyKey>` 标记和 `outbox:<requestId>`。outbox 的 value 是完整的 Kafka 消息信封，
@@ -323,7 +325,8 @@ API 写入 outbox，不直接发送 Kafka；relay 作为 `flash-sale-api` 内的
 不再次扣库存或创建新消息；接受只表示准入，不表示 Kafka 已投递或订单已创建。绑定不匹配返回冲突。
 标记保留以支持幂等，即使已确认的 outbox 字段被删除；不要把原始键或信封暴露给不受信任的客户端。
 
-定时 relay 扫描 Redis Cluster 当前可用 master 上的活动 hash，校验 outbox 信封并发布
+relay worker 首先处理 admission 提示，只读取对应 `outbox:<requestId>` 的已存值并复用同一发布路径；
+若在 `relay.poll-ms` 内没有提示，则扫描 Redis Cluster 当前可用 master 上的活动 hash。两条路径都校验 outbox 信封并发布
 到消费者使用的 Kafka topic，以消息 UUID 为 Kafka key。收到 broker 确认后，以原子比较删除方式删除仍与已发送 value 完全相同的
 outbox 字段；发送失败、超时或确认结果不明时保留以便重试。
 
@@ -335,7 +338,7 @@ outbox 字段；发送失败、超时或确认结果不明时保留以便重试�
 
 集群扫描不是快照：SCAN 可重复或遗漏，故障转移、节点不可达和 resharding 可使一次遍历错过字段；需要持续
 扫描所有当前 master、刷新拓扑并在拓扑稳定后重复扫描，不能以单次空扫描证明队列已清空。扫描成本、大活动
-hash、积压、损坏信封、Kafka 不可用及永久消费失败都需监控和人工处理；relay 没有指标或 metrics 端点，仅记录警告日志，也没有租约、重试上限、死信队列、
+hash、积压、损坏信封、Kafka 不可用及永久消费失败都需监控和人工处理；relay 没有指标或 metrics 端点，仅记录警告日志，也没有队列深度指标、租约、重试上限、死信队列、
 告警、清理或对账工具。限制 Redis 权限、禁止驱逐和不受控写入，规划内存、备份与恢复，持续观察积压和投递延迟。
 
 迁移时先停止所有 API 实例以及新旧库存写入方，等待在途操作结束并核对 Redis、Kafka 和数据库。历史
@@ -344,15 +347,16 @@ hash、积压、损坏信封、Kafka 不可用及永久消费失败都需监控�
 才启用新写入方和 relay；不要混合运行旧的直接发布写入方或直接回滚。现有 prefill 对已存在的 key 一律拒绝，
 不能用它覆盖已有 hash 或作为迁移、重建方案；任何人工重建都需在静止期间备份、核对并明确处理未完成请求。
 
-任务使用 API 的 Redis Cluster 连接配置和 Kafka producer 配置，topic 应与消费者一致。启用前必须配置 Redis Cluster
+relay worker 使用 API 的 Redis Cluster 连接配置和 Kafka producer 配置，topic 应与消费者一致。启用前必须配置 Redis Cluster
 和 Kafka，并确认 broker 的副本数、`min.insync.replicas` 和持久化策略。启用 relay 时会检查 producer 使用
 `acks=all`、幂等发送和字符串序列化器，否则启动失败。
 
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
-| `RELAY_ENABLED` | `false` | 显式启用定时任务 |
-| `RELAY_POLL_MS` | `1000` | 每次扫描完成后的等待时间，毫秒 |
+| `RELAY_ENABLED` | `false` | 显式启用后台 relay worker |
+| `RELAY_POLL_MS` | `1000` | 无 admission 提示时的最大扫描等待时间，毫秒 |
 | `RELAY_TIMEOUT_MS` | `5000` | 等待 Kafka ACK 的超时时间，毫秒 |
+| `RELAY_TRIGGER_QUEUE_CAPACITY` | `10000` | admission 提示队列容量；满时丢弃并依赖扫描 |
 | `RELAY_TOPIC` | `order-requests-v1` | Kafka 发布 topic |
 | `REDIS_CLUSTER_NODES` | 参见 dev 配置 | Redis Cluster 种子节点 |
 | `SPRING_KAFKA_BOOTSTRAP_SERVERS` | Spring 默认值 | Kafka bootstrap servers |
