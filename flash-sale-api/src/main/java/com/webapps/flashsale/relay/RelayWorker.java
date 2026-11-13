@@ -64,7 +64,10 @@ public class RelayWorker implements RelayTrigger, AutoCloseable {
     }
 
     public void start() {
-        if (closed.get() || !started.compareAndSet(false, true)) return;
+        if (closed.get() || !started.compareAndSet(false, true)) {
+            return;
+        }
+
         thread = new Thread(this::loop, "relay-worker");
         thread.setDaemon(true);
         thread.start();
@@ -85,8 +88,14 @@ public class RelayWorker implements RelayTrigger, AutoCloseable {
             while (!closed.get() && !Thread.currentThread().isInterrupted()) {
                 try {
                     OutboxRef ref = pending.poll(pollMs, TimeUnit.MILLISECONDS);
-                    if (redis == null) redis = connect();
-                    if (producer == null) producer = producerFactory.createNonTransactionalProducer();
+                    if (redis == null) {
+                        redis = connect();
+                    }
+
+                    if (producer == null) {
+                        producer = producerFactory.createNonTransactionalProducer();
+                    }
+
                     if (ref == null) {
                         scan(redis, producer);
                     } else {
