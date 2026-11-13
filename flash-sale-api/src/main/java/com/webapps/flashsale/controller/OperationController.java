@@ -18,6 +18,15 @@ public class OperationController {
         this.inventory = inventory;
     }
 
+    /**
+     * Loads an event's current database inventory snapshot into its Redis Cluster hash.
+     *
+     * <p>Call this only while all inventory writers for the event are quiescent. The operation
+     * refuses to overwrite an existing Redis inventory hash.</p>
+     *
+     * @param eventId event identifier to preload
+     * @return 201 when the hash is created, 409 when it already exists, or 400 for invalid event data
+     */
     @PostMapping("flash_sale_event/{eventId}")
     public ResponseEntity<Void> prefill(@PathVariable long eventId) {
         try {

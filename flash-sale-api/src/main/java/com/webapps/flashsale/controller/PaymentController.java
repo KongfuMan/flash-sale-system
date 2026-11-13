@@ -25,6 +25,13 @@ public class PaymentController {
         this.payments = payments;
     }
 
+    /**
+     * Records a payment for an eligible order.
+     *
+     * @param orderId order to pay
+     * @param request payment identifier, transaction identifier, and amount
+     * @return 201 with the recorded payment
+     */
     @PostMapping
     public ResponseEntity<PaymentResponse> pay(@PathVariable long orderId, @Valid @RequestBody PaymentRequest request) {
         if (orderId <= 0) {

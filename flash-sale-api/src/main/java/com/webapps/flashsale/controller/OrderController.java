@@ -21,6 +21,14 @@ public class OrderController {
         this.consumerOrders = consumerOrders;
     }
 
+    /**
+     * Returns a page of orders and their items.
+     *
+     * @param flashSaleEventId event identifier retained in the route
+     * @param page zero-based page number
+     * @param size number of orders per page, from 1 through 100
+     * @return the requested order page
+     */
     @GetMapping("{flashSaleEventId}/orders")
     public OrderPageResponse getOrders(@PathVariable long flashSaleEventId,
                                        @RequestParam(defaultValue = "0") int page,
@@ -31,6 +39,13 @@ public class OrderController {
         return orders.getOrders(page, size);
     }
 
+    /**
+     * Returns an order and its items by order ID.
+     *
+     * @param flashSaleEventId event identifier retained in the route
+     * @param orderId order identifier to retrieve
+     * @return 200 with the order, or 404 when it does not exist
+     */
     @GetMapping("{flashSaleEventId}/order/{orderId}")
     public ResponseEntity<OrderResponse> getOrder(@PathVariable long flashSaleEventId,
                                                   @PathVariable long orderId) {
@@ -38,6 +53,18 @@ public class OrderController {
         return ResponseEntity.of(order);
     }
 
+    /**
+     * Admits an order request through Redis inventory reservation and the outbox path.
+     *
+     * <p>A successful new reservation or matching idempotency replay returns 202 and does not
+     * confirm that a database order has been created or Kafka delivery has completed.</p>
+     *
+     * @param flashSaleEventId flash-sale event identifier
+     * @param flashSaleProductId event-product identifier
+     * @param idempotencyKey request key used to prevent duplicate reservations
+     * @param userId requesting user identifier
+     * @return 202 with {@code PENDING} when admission succeeds, or a mapped error response
+     */
     @PostMapping("/{flashSaleEventId}/product/{flashSaleProductId}")
     public ResponseEntity<?> placeOrder(
             @PathVariable long flashSaleEventId,
@@ -62,6 +89,19 @@ public class OrderController {
         };
     }
 
+    /**
+     * Creates an order synchronously through the consumer's database reservation service.
+     *
+     * <p>This endpoint bypasses Redis admission, the outbox, and Kafka delivery. It exists for
+     * direct database performance testing and returns 201 for a new order or 200 for an
+     * idempotency replay.</p>
+     *
+     * @param flashSaleEventId flash-sale event identifier
+     * @param flashSaleProductId event-product identifier
+     * @param idempotencyKey request key used to prevent duplicate orders
+     * @param userId requesting user identifier
+     * @return the persisted order identifier and pending-payment status
+     */
     @PostMapping("/{flashSaleEventId}/product/{flashSaleProductId}/direct")
     public ResponseEntity<Map<String, Object>> placeOrderDirect(
             @PathVariable long flashSaleEventId,
