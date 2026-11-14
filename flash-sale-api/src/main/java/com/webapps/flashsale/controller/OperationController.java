@@ -23,12 +23,12 @@ public class OperationController {
      * <p>Call this only while all inventory writers for the event are quiescent. The operation
      * refuses to overwrite an existing Redis inventory hash.</p>
      *
-     * @param eventId event identifier to preload
+     * @param flashSaleEventId event identifier to preload
      * @return 201 when the hash is created, 409 when it already exists, or 400 for invalid event data
      */
-    @PostMapping("flash_sale_event/{eventId}")
-    public ResponseEntity<Void> prefill(@PathVariable long eventId) {
-        if (!inventory.prefill(eventId)) {
+    @PostMapping("flash_sale_event/{flashSaleEventId}")
+    public ResponseEntity<Void> prefill(@PathVariable long flashSaleEventId) {
+        if (!inventory.prefill(flashSaleEventId)) {
             return ResponseEntity.status(HttpStatus.CONFLICT).build();
         }
         return ResponseEntity.status(HttpStatus.CREATED).build();
