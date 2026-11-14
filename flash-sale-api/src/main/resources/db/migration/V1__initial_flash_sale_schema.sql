@@ -1,4 +1,4 @@
--- Initial schema based on the coordinator's local business tables. Citus distribution is
+-- Initial flash-sale schema based on the coordinator's local business tables. Citus distribution is
 -- intentionally absent: none of these tables is distributed or a reference table.
 -- Constraints encode the current design invariants: positive 64-bit identifiers,
 -- single-item orders with quantity 1, idempotent order creation, consistent

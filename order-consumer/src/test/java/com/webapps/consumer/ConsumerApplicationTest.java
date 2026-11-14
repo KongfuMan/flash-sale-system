@@ -21,6 +21,6 @@ class ConsumerApplicationTest {
         assertNotNull(context.getBean(MessageListener.class));
         assertTrue(context.getBeansWithAnnotation(Controller.class).isEmpty());
         assertFalse(context.getResource("classpath:redis/reserve.lua").exists());
-        assertFalse(context.getResource("classpath:db/migration/V1__capture_business_schema.sql").exists());
+        assertFalse(context.getResource("classpath:db/migration/V1__initial_flash_sale_schema.sql").exists());
     }
 }
