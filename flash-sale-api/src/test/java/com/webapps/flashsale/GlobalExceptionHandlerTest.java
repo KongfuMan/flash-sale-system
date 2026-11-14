@@ -6,7 +6,6 @@ import com.webapps.flashsale.service.OrderService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
-import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -20,22 +19,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 class GlobalExceptionHandlerTest {
     private final OrderService orders = mock(OrderService.class);
-    private final com.webapps.consumer.service.OrderService consumerOrders = mock(com.webapps.consumer.service.OrderService.class);
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        mvc = MockMvcBuilders.standaloneSetup(new OrderController(orders, consumerOrders))
+        mvc = MockMvcBuilders.standaloneSetup(new OrderController(orders))
                 .setControllerAdvice(new GlobalExceptionHandler()).build();
     }
 
     @Test
-    void returnsValidationAndMalformedRequestErrors() throws Exception {
-        mvc.perform(post("/api/v1/flash_sale_event/1/product/2").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"userId\":null,\"idempotencyKey\":\"key\"}"))
+    void returnsValidationErrors() throws Exception {
+        mvc.perform(post("/api/v1/flash_sale_event/1/product/2"))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.message").exists());
-        mvc.perform(post("/api/v1/flash_sale_event/1/product/2").contentType(MediaType.APPLICATION_JSON).content("{"))
-                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.message").value("Invalid request parameters or body"));
         mvc.perform(get("/api/v1/flash_sale_event/not-a-number/orders"))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.message").exists());
     }
@@ -44,8 +39,9 @@ class GlobalExceptionHandlerTest {
     void preservesExplicitStatusAndReason() throws Exception {
         when(orders.reserve(anyLong(), anyLong(), anyLong(), anyString()))
                 .thenThrow(new ResponseStatusException(HttpStatus.CONFLICT, "Out of stock"));
-        mvc.perform(post("/api/v1/flash_sale_event/1/product/2").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"userId\":3,\"idempotencyKey\":\"key\"}"))
+        mvc.perform(post("/api/v1/flash_sale_event/1/product/2")
+                        .header("UserId", 3)
+                        .header("Idempotency-Key", "key"))
                 .andExpect(status().isConflict()).andExpect(jsonPath("$.message").value("Out of stock"));
     }
 

@@ -14,11 +14,9 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api/v1/flash_sale_event/")
 public class OrderController {
     private final OrderService orders;
-    private final com.webapps.consumer.service.OrderService consumerOrders;
 
-    public OrderController(OrderService orders, com.webapps.consumer.service.OrderService consumerOrders) {
+    public OrderController(OrderService orders) {
         this.orders = orders;
-        this.consumerOrders = consumerOrders;
     }
 
     /**
@@ -89,31 +87,4 @@ public class OrderController {
         };
     }
 
-    /**
-     * Creates an order synchronously through the consumer's database reservation service.
-     *
-     * <p>This endpoint bypasses Redis admission, the outbox, and Kafka delivery. It exists for
-     * direct database performance testing and returns 201 for a new order or 200 for an
-     * idempotency replay.</p>
-     *
-     * @param flashSaleEventId flash-sale event identifier
-     * @param flashSaleProductId event-product identifier
-     * @param idempotencyKey request key used to prevent duplicate orders
-     * @param userId requesting user identifier
-     * @return the persisted order identifier and pending-payment status
-     */
-    @PostMapping("/{flashSaleEventId}/product/{flashSaleProductId}/direct")
-    public ResponseEntity<Map<String, Object>> placeOrderDirect(
-            @PathVariable long flashSaleEventId,
-            @PathVariable long flashSaleProductId,
-            @RequestHeader("Idempotency-Key") String idempotencyKey,
-            @RequestHeader("UserId") long userId) {
-        if (flashSaleEventId <= 0 || flashSaleProductId <= 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "flashSaleEventId and flashSaleProductId must be positive");
-        }
-
-        var result = consumerOrders.reserve(flashSaleEventId, flashSaleProductId, userId, idempotencyKey);
-        return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK)
-                .body(Map.of("orderId", result.orderId(), "status", "PENDING_PAYMENT"));
-    }
 }

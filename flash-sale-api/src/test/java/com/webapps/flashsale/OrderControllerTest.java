@@ -17,7 +17,6 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -27,7 +26,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class OrderControllerTest {
     @Autowired private MockMvc mvc;
     @MockitoBean private OrderService orders;
-    @MockitoBean private com.webapps.consumer.service.OrderService consumerOrders;
 
     @Test
     void returnsOrdersWithoutAuthentication() throws Exception {
@@ -76,16 +74,4 @@ class OrderControllerTest {
         mvc.perform(get("/api/v1/flash_sale_event/1/order/99")).andExpect(status().isNotFound());
     }
 
-    @Test
-    void placesOrderDirectlyThroughConsumerWithoutAdmissionCache() throws Exception {
-        when(consumerOrders.reserve(1L, 2L, 3L, "key"))
-                .thenReturn(new com.webapps.consumer.service.OrderService.Result(42L, true));
-
-        mvc.perform(post("/api/v1/flash_sale_event/1/product/2/direct")
-                        .header("Idempotency-Key", "key")
-                        .header("UserId", "3"))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.orderId").value(42))
-                .andExpect(jsonPath("$.status").value("PENDING_PAYMENT"));
-    }
 }
