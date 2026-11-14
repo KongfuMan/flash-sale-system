@@ -6,10 +6,15 @@ import com.webapps.flashsale.entity.FlashSaleEventProductEntity;
 import com.webapps.flashsale.outbox.OutboxKeys;
 import com.webapps.flashsale.repository.FlashSaleEventProductRepository;
 import com.webapps.flashsale.repository.FlashSaleEventRepository;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
@@ -17,7 +22,6 @@ import org.springframework.stereotype.Service;
 /** Experimental Redis inventory primitives; not connected to database order processing. */
 @Service
 public class InventoryPrimitives {
-    static final int MAX_PRODUCTS = 1000;
     private static final ObjectMapper MARKER_MAPPER = new ObjectMapper();
     private static final DefaultRedisScript<Long> PREFILL = script("prefill");
     private static final DefaultRedisScript<Long> ACTIVATE = script("activate");
@@ -42,22 +46,45 @@ public class InventoryPrimitives {
     private final FlashSaleEventRepository events;
     private final FlashSaleEventProductRepository products;
     private final StringRedisTemplate redis;
+    private final Duration cacheTtlBuffer;
+    private final Clock clock;
+
+    @Autowired
+    public InventoryPrimitives(FlashSaleEventRepository events, FlashSaleEventProductRepository products,
+                               StringRedisTemplate redis,
+                               @Value("${inventory.cache.ttl-buffer:24h}") Duration cacheTtlBuffer) {
+        this(events, products, redis, cacheTtlBuffer, Clock.systemDefaultZone());
+    }
 
     public InventoryPrimitives(FlashSaleEventRepository events, FlashSaleEventProductRepository products, StringRedisTemplate redis) {
+        this(events, products, redis, Duration.ofHours(24), Clock.systemDefaultZone());
+    }
+
+    InventoryPrimitives(FlashSaleEventRepository events, FlashSaleEventProductRepository products,
+                        StringRedisTemplate redis, Duration cacheTtlBuffer, Clock clock) {
         this.events = events;
         this.products = products;
         this.redis = redis;
+        this.cacheTtlBuffer = Objects.requireNonNull(cacheTtlBuffer);
+        this.clock = Objects.requireNonNull(clock);
     }
 
     public boolean prefill(long flashSaleEventId) {
         String key = OutboxKeys.eventKey(flashSaleEventId);
-        var event = events.findById(flashSaleEventId).orElseThrow(() -> new IllegalArgumentException("Event not found"));
-        var eventProducts = products.findByEventId(flashSaleEventId, PageRequest.of(0, MAX_PRODUCTS + 1));
-        if (eventProducts.isEmpty() || eventProducts.size() > MAX_PRODUCTS) {
-            throw new IllegalArgumentException("Event must have between 1 and " + MAX_PRODUCTS + " products");
+        var event = events.findById(flashSaleEventId)
+                          .orElseThrow(() -> new IllegalArgumentException("Event not found"));
+
+        var eventProducts = products.findByEventId(flashSaleEventId);
+        if (eventProducts.isEmpty()) {
+            throw new IllegalArgumentException("No product found for event " + flashSaleEventId);
+        }
+        Duration ttl = Duration.between(LocalDateTime.now(clock), event.endAt).plus(cacheTtlBuffer);
+        if (ttl.isNegative() || ttl.isZero() || ttl.toSeconds() <= 0) {
+            throw new IllegalArgumentException("Event retention period must be positive");
         }
 
         List<String> args = new ArrayList<>();
+        args.add(Long.toString(ttl.toSeconds()));
         args.add("status");
         args.add(event.status);
         for (FlashSaleEventProductEntity row : eventProducts) {

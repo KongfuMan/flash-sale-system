@@ -37,6 +37,7 @@ spring:
 inventory:
   cache:
     enabled: ${INVENTORY_CACHE_ENABLED:false}
+    ttl-buffer: ${INVENTORY_CACHE_TTL_BUFFER:24h}
 
 management:
   health:

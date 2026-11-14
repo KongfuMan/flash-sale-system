@@ -4,10 +4,14 @@ import com.webapps.flashsale.entity.FlashSaleEventEntity;
 import com.webapps.flashsale.entity.FlashSaleEventProductEntity;
 import com.webapps.flashsale.repository.FlashSaleEventProductRepository;
 import com.webapps.flashsale.repository.FlashSaleEventRepository;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import static org.junit.jupiter.api.Assertions.*;
@@ -20,12 +24,11 @@ class InventoryPrimitivesTest {
     private final StringRedisTemplate redis = mock(StringRedisTemplate.class);
     private final InventoryPrimitives inventory = new InventoryPrimitives(events, products, redis);
 
-    @Test void refusesIncompletePrefill() {
+    @Test void refusesPrefillWithoutProducts() {
         var event = new FlashSaleEventEntity();
         event.status = "RUNNING";
         when(events.findById(1L)).thenReturn(Optional.of(event));
-        when(products.findByEventId(eq(1L), any(Pageable.class)))
-                .thenReturn(java.util.Collections.nCopies(1001, new FlashSaleEventProductEntity()));
+        when(products.findByEventId(1L)).thenReturn(List.of());
         assertThrows(IllegalArgumentException.class, () -> inventory.prefill(1));
         verifyNoInteractions(redis);
     }
@@ -33,18 +36,34 @@ class InventoryPrimitivesTest {
     @Test void prefillsProductStockUsingProdPrefix() {
         var event = new FlashSaleEventEntity();
         event.status = "RUNNING";
+        event.endAt = LocalDateTime.of(2026, 1, 1, 1, 0);
         var product = new FlashSaleEventProductEntity();
         product.eventProductId = 2L;
         product.allocatedQuantity = 10;
         product.soldQuantity = 2;
         product.reservedQuantity = 1;
         when(events.findById(1L)).thenReturn(Optional.of(event));
-        when(products.findByEventId(eq(1L), any(Pageable.class))).thenReturn(List.of(product));
+        when(products.findByEventId(1L)).thenReturn(List.of(product));
         when(redis.execute(any(RedisScript.class), anyList(), any(Object[].class))).thenReturn(1L);
 
-        assertTrue(inventory.prefill(1));
+        var fixedInventory = new InventoryPrimitives(events, products, redis, Duration.ofHours(1),
+                Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC));
+        assertTrue(fixedInventory.prefill(1));
         verify(redis).execute(any(RedisScript.class), eq(List.of("flashsale:inventory:v1:{event:1}")),
-                eq("status"), eq("RUNNING"), eq("prod:2"), eq("7"));
+                eq("7200"), eq("status"), eq("RUNNING"), eq("prod:2"), eq("7"));
+    }
+
+    @Test void rejectsExpiredEventRetention() {
+        var event = new FlashSaleEventEntity();
+        event.status = "ENDED";
+        event.endAt = LocalDateTime.of(2025, 12, 31, 22, 0);
+        when(events.findById(1L)).thenReturn(Optional.of(event));
+        when(products.findByEventId(1L)).thenReturn(List.of(new FlashSaleEventProductEntity()));
+        var fixedInventory = new InventoryPrimitives(events, products, redis, Duration.ofHours(1),
+                Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC));
+
+        assertThrows(IllegalArgumentException.class, () -> fixedInventory.prefill(1));
+        verifyNoInteractions(redis);
     }
 
     @Test void mapsReserveFailuresAndRejectsInvalidIds() {

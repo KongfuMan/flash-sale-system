@@ -17,8 +17,8 @@ INSERT INTO public.products (product_id, name, total_inventory, unit_price) VALU
 ON CONFLICT DO NOTHING;
 
 INSERT INTO public.flash_sale_events (event_id, name, start_at, end_at, status, created_at) VALUES
-    (1, 'Morning Flash Sale', '2026-10-25 00:09:31', '2026-10-25 03:09:31', 'RUNNING', '2026-10-25 01:09:31'),
-    (2, 'Evening Flash Sale', '2026-10-25 04:09:31', '2026-10-25 07:09:31', 'UPCOMING', '2026-10-25 01:09:31')
+    (1, 'Morning Flash Sale', date_trunc('hour', now()), date_trunc('hour', now()) + interval '12 hours', 'RUNNING', '2026-10-25 01:09:31'),
+    (2, 'Evening Flash Sale', date_trunc('hour', now()) + interval '12 hours', date_trunc('hour', now()) + interval '24 hours', 'UPCOMING', '2026-10-25 01:09:31')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO public.flash_sale_event_products
