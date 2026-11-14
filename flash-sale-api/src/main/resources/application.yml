@@ -1,0 +1,57 @@
+# Shared defaults loaded for every environment.
+# An active profile loads application-<profile>.properties and overrides matching settings.
+# Select a profile with SPRING_PROFILES_ACTIVE (for example, dev, test, or prod).
+server:
+  port: 8082
+
+# Apply Flyway migrations as a controlled deployment step, not on application startup.
+# Flyway owns the schema; Hibernate must not create or modify it.
+spring:
+  flyway:
+    enabled: false
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      username: ${REDIS_USERNAME:}
+      password: ${REDIS_PASSWORD:}
+      connect-timeout: 200ms
+      timeout: 200ms
+      repositories:
+        enabled: false
+  kafka:
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.block.ms: 5000
+        max.in.flight.requests.per.connection: 5
+
+# Reservations require explicitly provisioned Redis; it is not checked by the health endpoint.
+inventory:
+  cache:
+    enabled: ${INVENTORY_CACHE_ENABLED:false}
+
+management:
+  health:
+    redis:
+      enabled: false
+
+# Relay publishes admitted outbox records to Kafka and uses spring.kafka producer settings.
+# Enabled by default; Redis Cluster and Kafka must be provisioned. Delivery is at least once.
+# Successful admissions enqueue a best-effort hint; relay.poll-ms is the maximum fallback
+# scan interval. Hints are optional: dropping one only delays delivery until the next scan.
+# Relay requires acks=all/-1, idempotence=true, String serializers, and no transactional.id.
+# It snapshots producer properties at startup; later factory changes do not affect the relay.
+relay:
+  enabled: ${RELAY_ENABLED:true}
+  topic: ${RELAY_TOPIC:order-requests-v1}
+  poll-ms: ${RELAY_POLL_MS:1000}
+  timeout-ms: ${RELAY_TIMEOUT_MS:5000}
+  trigger-queue-capacity: ${RELAY_TRIGGER_QUEUE_CAPACITY:10000}
