@@ -7,7 +7,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/v1/operation/")
@@ -29,12 +28,8 @@ public class OperationController {
      */
     @PostMapping("flash_sale_event/{eventId}")
     public ResponseEntity<Void> prefill(@PathVariable long eventId) {
-        try {
-            if (!inventory.prefill(eventId)) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "Inventory is already initialized");
-            }
-        } catch (IllegalArgumentException ex) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+        if (!inventory.prefill(eventId)) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).build();
         }
         return ResponseEntity.status(HttpStatus.CREATED).build();
     }
